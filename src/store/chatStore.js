@@ -26,17 +26,19 @@ export const useChatStore = create(
         const text = rawText.trim();
         if (!text || get().isSending) return;
 
-        const { plan, transactions, currency, apiKey } = useDbStore.getState();
         const history = toGeminiHistory(get().messages);
         const userMsg = { id: `msg-${Date.now()}`, role: 'user', timestamp: nowTime(), text };
         set((s) => ({ messages: [...s.messages, userMsg], isSending: true }));
 
         try {
+          // Refresh stale holding prices first so answers use today's values
+          await useDbStore.getState().refreshPrices().catch(() => {});
+          const { plan, transactions, holdings, currency, apiKey } = useDbStore.getState();
           const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
-            state: { transactions, plan },
+            state: { transactions, plan, holdings },
             currency,
             apiKey,
             fmt: (v) => formatMoney(v, currency),
@@ -60,7 +62,7 @@ export const useChatStore = create(
             badges: applied.badges,
             changes: applied.changes,
             alerts: budgetAlerts(before, after, applied.plan, fmt),
-            card: buildCard(result.card, after, applied.plan),
+            card: buildCard(result.card, after, applied.plan, { holdings: applied.holdings, slabPct: planning.slabPct }),
             calcCards: result.calcs
           };
           set((s) => ({

@@ -4,6 +4,9 @@ import { CARD_TYPES, TX_TYPES, applyPlanUpdate, isValidDate, normalizeTransactio
 import { project, projectRange, requiredContribution } from './finance/calculators';
 import { INSTRUMENTS, TAX_RULES } from './finance/taxRules';
 import { usdToInr } from './prices/fx';
+import { latestNav, searchFunds } from './prices/mf';
+import { searchUsSymbols } from './prices/us';
+import { createHolding, currentValue, portfolioSummary } from './portfolio';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
@@ -166,9 +169,68 @@ export const TOOL_DECLARATIONS = [
     }
   },
   {
+    name: 'search_mutual_funds',
+    description: 'Find Indian mutual fund scheme codes by name (mfapi.in). Use before add_holding for a mutual fund.',
+    parameters: { type: 'OBJECT', properties: { query: { type: 'STRING' } }, required: ['query'] }
+  },
+  {
+    name: 'search_us_stocks',
+    description: 'Find US stock/ETF ticker symbols by company or fund name.',
+    parameters: { type: 'OBJECT', properties: { query: { type: 'STRING' } }, required: ['query'] }
+  },
+  {
+    name: 'add_holding',
+    description:
+      'Record an investment the user owns. Mutual funds: schemeCode plus units, or currentValue, or investedAmount + startDate (lumpsum). US stocks/ETFs: symbol + units (shares). FD: investedAmount + ratePct + startDate (+ maturityDate). PPF, NPS, Indian stocks/IPOs and anything else: currentValue (+ investedAmount, startDate if known). Prices are fetched automatically.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        name: { type: 'STRING' },
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: INSTRUMENT_HELP },
+        schemeCode: { type: 'STRING', description: 'From search_mutual_funds' },
+        symbol: { type: 'STRING', description: 'US ticker, e.g. VOO' },
+        units: { type: 'NUMBER', description: 'Fund units or number of shares' },
+        investedAmount: { type: 'NUMBER', description: 'Total rupees invested (cost)' },
+        startDate: DATE,
+        currentValue: { type: 'NUMBER', description: 'Current value in rupees' },
+        ratePct: { type: 'NUMBER', description: 'FD interest rate' },
+        maturityDate: DATE
+      },
+      required: ['name', 'instrument']
+    }
+  },
+  {
+    name: 'update_holding',
+    description: 'Change a holding by id (e.g. new units after buying more, a new value for PPF/NPS). Include only fields that change.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        id: { type: 'STRING' },
+        name: { type: 'STRING' },
+        units: { type: 'NUMBER' },
+        investedAmount: { type: 'NUMBER' },
+        currentValue: { type: 'NUMBER' },
+        startDate: DATE,
+        ratePct: { type: 'NUMBER' },
+        maturityDate: DATE
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'remove_holding',
+    description: 'Remove holdings by id (sold, matured or added by mistake).',
+    parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
+  },
+  {
+    name: 'get_portfolio',
+    description: 'Current holdings with live values, gains, allocation, net worth and estimated tax if everything were sold today.',
+    parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
     name: 'show_card',
     description:
-      'Show a visual card under your reply for the current month: "summary" (income/spent/saved), "buckets" (needs/wants/savings vs. plan) or "categories" (category spending vs. limits).',
+      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits) or "portfolio" (net worth and holdings).',
     parameters: {
       type: 'OBJECT',
       properties: { type: { type: 'STRING', enum: CARD_TYPES.filter((t) => t !== 'none') } },
@@ -355,6 +417,69 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
       pending.calcs.push({ kind: 'required', params, target, settings: settings.calc });
       return { requiredAmount: amount, perContribution: params.mode, targetInHand: target, ...summarize(project(params, settings.calc)) };
     }
+    case 'search_mutual_funds': {
+      const funds = (await searchFunds(String(args.query || ''))).slice(0, 10);
+      if (funds.length === 0) return { results: [], note: 'No matches; try a shorter name' };
+      // Some schemes list Direct and Regular plans under the same name. Add
+      // their NAVs so the user can tell them apart (Direct has the higher NAV).
+      const counts = funds.reduce((m, f) => ({ ...m, [f.name]: (m[f.name] ?? 0) + 1 }), {});
+      const dupes = funds.filter((f) => counts[f.name] > 1).slice(0, 4);
+      if (dupes.length === 0) return { results: funds };
+      const navs = await Promise.all(dupes.map((f) => latestNav(f.schemeCode).catch(() => null)));
+      const navBy = new Map(dupes.map((f, i) => [f.schemeCode, navs[i]?.nav]));
+      return {
+        results: funds.map((f) => (navBy.get(f.schemeCode) ? { ...f, nav: navBy.get(f.schemeCode) } : f)),
+        note: 'Schemes with the same name are usually the Direct and Regular plans; Direct has the higher NAV. Confirm with the user if unsure.'
+      };
+    }
+    case 'search_us_stocks':
+      return { results: await searchUsSymbols(String(args.query || ''), settings.planning.finnhubKey) };
+    case 'add_holding': {
+      const id = `hold-${pending.idBase}-${pending.holdingsAdded.length}`;
+      const holding = await createHolding(args, { finnhubKey: settings.planning.finnhubKey }, id);
+      pending.holdingsAdded.push(holding);
+      const value = currentValue(holding);
+      return {
+        added: { id, name: holding.name, instrument: holding.instrument, units: holding.units, value: value != null ? Math.round(value) : null },
+        ...(holding.notes?.length && { notes: holding.notes })
+      };
+    }
+    case 'update_holding': {
+      const before = state.holdings.find((h) => h.id === args.id);
+      if (!before) return { error: `No holding with id ${args.id}` };
+      const after = { ...before };
+      if (args.name) after.name = String(args.name);
+      if (Number(args.units) > 0) after.units = Number(args.units);
+      if (Number(args.investedAmount) > 0) after.invested = Number(args.investedAmount);
+      if (isValidDate(args.startDate)) after.startDate = args.startDate;
+      if (Number(args.ratePct) > 0) after.ratePct = Number(args.ratePct);
+      if (isValidDate(args.maturityDate)) after.maturityDate = args.maturityDate;
+      if (Number(args.currentValue) > 0) {
+        const v = Number(args.currentValue);
+        if (after.source === 'manual') Object.assign(after, { manualValue: v, manualValueDate: today() });
+        else if (after.source === 'mf' && after.price) after.units = Math.round((v / after.price) * 1000) / 1000;
+        else if (after.source === 'us' && after.price && after.fxRate) after.units = Math.round((v / (after.price * after.fxRate)) * 1000) / 1000;
+        else return { error: 'currentValue cannot be set for this holding; change units or the FD details instead' };
+      }
+      if (JSON.stringify(after) === JSON.stringify(before)) {
+        return {
+          error:
+            'Nothing changed. update_holding can change name, units, investedAmount, currentValue, startDate, ratePct and maturityDate. To switch to a different fund or plan, remove_holding and add_holding again.'
+        };
+      }
+      pending.holdingEdits = pending.holdingEdits.filter((e) => e.before.id !== before.id);
+      pending.holdingEdits.push({ before, after });
+      const value = currentValue(after);
+      return { updated: { id: after.id, name: after.name, units: after.units, value: value != null ? Math.round(value) : null } };
+    }
+    case 'remove_holding': {
+      const list = Array.isArray(args.ids) ? args.ids : [];
+      const known = new Set(state.holdings.map((h) => h.id));
+      pending.holdingRemoveIds.push(...list.filter((id) => known.has(id)));
+      return { removed: list.filter((id) => known.has(id)).length, unknownIds: list.filter((id) => !known.has(id)) };
+    }
+    case 'get_portfolio':
+      return portfolioSummary(state.holdings, settings.calc.slabPct);
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
       pending.card = args.type;

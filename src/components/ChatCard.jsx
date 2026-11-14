@@ -1,5 +1,7 @@
 import { useFormatMoney } from '../store/dbStore';
 import AllocationBarChart from './AllocationBarChart';
+import { AllocationBar, GainText, PortfolioHeadline } from './PortfolioSummary';
+import { formatShortINR } from '../lib/budget';
 
 const monthLabel = (month) =>
   new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: 'short', year: 'numeric' });
@@ -54,10 +56,34 @@ function CategoriesCard({ data }) {
   );
 }
 
+function PortfolioCard({ data }) {
+  return (
+    <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <PortfolioHeadline summary={data} />
+      <div className="space-y-3 px-3.5 py-3">
+        <AllocationBar allocation={data.allocation} />
+        <div className="divide-y divide-slate-100">
+          {data.holdings.map((h) => (
+            <div key={h.id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
+              <span className="truncate text-slate-700">{h.name}</span>
+              <span className="shrink-0 text-right">
+                <span className="font-semibold tabular-nums text-slate-900">{h.value != null ? formatShortINR(h.value) : '—'}</span>{' '}
+                <GainText gain={h.gain} pct={h.gainPct} className="text-[10px]" />
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="text-[10px] text-slate-400">Values as of {data.asOf}</div>
+      </div>
+    </div>
+  );
+}
+
 const TITLES = { summary: 'Month summary', buckets: 'Plan vs. actual', categories: 'Top categories' };
 
 // A snapshot of the numbers at the time of the reply, shown under it in chat.
 export default function ChatCard({ card }) {
+  if (card.type === 'portfolio') return <PortfolioCard data={card.data} />;
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="mb-2.5 flex items-center justify-between text-[11px] font-semibold text-slate-500">

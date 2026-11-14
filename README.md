@@ -1,6 +1,6 @@
 # FinChat — Local Budget Copilot
 
-A chat-first, local-first budgeting app. You type or say what you spent, earned or saved, and Google Gemini turns it into transactions, budget changes and answers. The data lives on your device in IndexedDB; a dashboard and manual entry are there when you want them.
+A chat-first, local-first app for budgeting and financial planning. You type or say what you spent, earned, saved or own, and Google Gemini turns it into transactions, budget changes, after-tax projections and a live portfolio. The data lives on your device in IndexedDB; a dashboard and manual entry are there when you want them.
 
 Built with React, Vite, Tailwind CSS and zustand, and packaged as an Android app with Capacitor.
 
@@ -15,7 +15,14 @@ Built with React, Vite, Tailwind CSS and zustand, and packaged as an Android app
 - **Voice input:** tap the mic and speak (English, India). The message sends when you stop talking.
 - **Plan changes on request:** "set dining limit to 8000", "change the split to 50/25/25". Partial splits are rebalanced to 100%.
 
+**Planning**
+- **After-tax projections:** "2L in an FD at 7.25% for 3 years", "15k SIP in Parag Parikh for 10 years", "$5,000 in VOO for 8 years", "10k/month in NPS till 60". Cards show the tax breakdown, post-tax return, value in today's money, a range at ±2%, and sliders for return and years.
+- **Required investment:** "how much monthly to have ₹50L in today's money in 12 years?"
+- **Investments you own:** mutual funds (Indian and international), US stocks/ETFs, FDs, PPF, NPS and Indian stocks/IPOs, added and updated by chat. Values update from live prices; "what's my net worth?" shows allocation, gains and tax if sold today.
+- **Settings:** tax slab (new regime), inflation, rupee depreciation, NPS annuity rate and default expected returns.
+
 **Dashboard (secondary)**
+- Investments: net worth, allocation, each holding with value and gain, tax if sold today, and a price refresh.
 - Current-month KPIs, 50/30/20 plan vs. actual, and spending by category.
 - Searchable transaction list (all months) and editable category limits.
 - Manual entry, JSON export, and reset to sample data.
@@ -33,11 +40,44 @@ Each message runs a [Gemini function-calling](https://ai.google.dev/gemini-api/d
 | `edit_transactions` | action | Correct transactions by id |
 | `delete_transactions` | action | Remove transactions by id |
 | `update_plan` | action | Change the income target, split or category limits |
-| `show_card` | action | Attach a summary, buckets or categories card to the reply |
+| `calculate_returns` | query | After-tax projection for FD/RD, PPF, NPS, Indian equity, international funds, US stocks or debt funds (USD amounts converted) |
+| `required_investment` | query | Lumpsum/monthly/yearly amount needed to reach an after-tax target |
+| `search_mutual_funds` | query | Find Indian mutual fund scheme codes (mfapi.in) |
+| `search_us_stocks` | query | Find US tickers (Finnhub) |
+| `get_portfolio` | query | Holdings with live values, allocation, gains and tax if sold today |
+| `add_holding` | action | Record an investment; units can be derived from a lumpsum's NAV on its date |
+| `update_holding` | action | Change units, cost, value or FD details |
+| `remove_holding` | action | Remove a holding |
+| `show_card` | action | Attach a summary, buckets, categories or portfolio card to the reply |
 
 Query tools run locally, and only their results are sent back to Gemini. Action tools are validated (amounts, types, categories, dates, ids) and reported back to the model, so its reply only describes changes that were accepted. The app then applies them in one step and records them for Undo.
 
-**What Gemini sees:** this month's budget status, your 10 most recent transactions, the last 10 chat messages, and the results of any tools it calls. It never receives the full ledger.
+**What Gemini sees:** this month's budget status, your 10 most recent transactions, the names of your holdings, the last 10 chat messages, and the results of any tools it calls. It never receives the full ledger. Calculations are always done by the app, never by the model.
+
+## Tax and prices
+
+**Tax rules** (FY 2026-27, new regime) live in `src/lib/finance/taxRules.js`, so they can be updated when budgets change:
+
+| Investment | Tax |
+| --- | --- |
+| Indian equity funds, stocks, IPOs | Short-term (≤12 months) 20%; long-term 12.5% above ₹1.25L a year |
+| International funds (Indian fund houses), US stocks/ETFs | Short-term (≤24 months) at your slab; long-term 12.5%, no exemption |
+| FD/RD, debt funds | Your slab |
+| PPF | Tax-free |
+| NPS | 60% lump sum tax-free; annuity income at your slab |
+
+All amounts add 4% cess; surcharge is not modelled. SIPs are taxed per instalment, so recent instalments count as short-term. Projections are estimates, and market returns are assumptions.
+
+**Price sources:**
+
+| Data | Source | Key |
+| --- | --- | --- |
+| Indian mutual fund NAVs (incl. international funds from Indian fund houses) | [mfapi.in](https://www.mfapi.in) | None |
+| US stocks and ETFs | [Finnhub](https://finnhub.io) (free tier, personal use) | Enter in Settings |
+| USD→INR | [Frankfurter](https://frankfurter.dev) | None |
+| PPF, NPS, Indian stocks | Entered manually | — |
+
+On Android, price requests go through Capacitor's native HTTP client, because mfapi.in's NAV endpoints don't allow browser cross-origin requests. Prices refresh when older than 6 hours.
 
 ## Getting started
 
@@ -48,7 +88,7 @@ npm install
 npm run dev
 ```
 
-Then tap **API Key** in the app and paste your key (or pick a `.env`/`.txt` file containing it). The key is stored in the device's localStorage and sent only to the Gemini API.
+Then tap **API Key** in the app and paste your key (or pick a `.env`/`.txt` file containing it). The key is stored in the device's localStorage and sent only to the Gemini API. For US stock prices, add a free [Finnhub key](https://finnhub.io) under the gear icon (Settings).
 
 Alternatively, `cp .env.example .env` and set `VITE_GEMINI_API_KEY`.
 
@@ -85,19 +125,26 @@ src/
   pages/
     Chat.jsx            # Chat feed, quick prompts and input
     Dashboard.jsx       # Monthly KPIs, charts, ledger and category limits
-  components/           # UI pieces composed by the two pages (ChatCard, ChatMessage, ...)
+  components/           # UI pieces composed by the two pages (ChatCard, ReturnsCard,
+                        #   PortfolioSection, SettingsModal, ...)
   hooks/
     useVoiceInput.js    # Speech recognition with auto-send on end of speech
   store/
-    dbStore.js          # Budget data (transactions, plan, currency) + API key
+    dbStore.js          # Budget data (transactions, plan, currency, holdings) + API key
     chatStore.js        # Messages, sendMessage and undoMessage
     idbStorage.js       # IndexedDB adapter for zustand persist (localStorage fallback)
+    settingsStore.js    # Tax slab, assumptions, default returns, Finnhub key
     useHydration.js     # Waits for stored data to load before rendering
   lib/
     gemini.js           # System prompt, chat history and the function-calling loop
     tools.js            # Tool declarations and their local implementations
     assistantActions.js # Applies tool actions, undo, budget alerts and card data
     validation.js       # Checks transactions and plan updates proposed by the model
+    portfolio.js        # Holdings: creation, valuation, price refresh, exit-tax estimate
+    finance/
+      calculators.js    # After-tax projections and required-contribution solver
+      taxRules.js       # Tax rates and instrument definitions
+    prices/             # mfapi.in, Finnhub, Frankfurter clients and a native-aware HTTP helper
     budget.js           # Monthly metrics and money formatting
     constants.js        # Categories, defaults, sample data, local dates
 android/                # Capacitor Android project

@@ -35,6 +35,8 @@ The user has ${state.transactions.length} transactions from ${earliest} to today
 This month's budget status (${currentMonth()}):
 ${JSON.stringify(budgetStatus(state))}
 
+Investments: ${state.holdings?.length ? `${state.holdings.length} holdings: ${state.holdings.map((h) => `${h.id} ${h.name}`).join('; ')}. Call get_portfolio for values.` : 'none recorded yet.'}
+
 Most recent transactions (with ids):
 ${JSON.stringify(state.transactions.slice(0, 10))}
 
@@ -50,7 +52,8 @@ Rules:
 4. Questions: for anything beyond this month's status above (other months, date ranges, trends, specific merchants), call get_spending_summary, find_transactions or get_budget_status. Never estimate or invent numbers.
 5. Call show_card when a visual helps: "summary", "buckets" or "categories" (current month only).
 6. Investments: for any projection, maturity value, "how much will X become" or "how much should I invest" question, call calculate_returns or required_investment. Never do the maths yourself. Use the user's stated return if given; otherwise omit it to use their saved default. Pick the instrument carefully (Indian stocks and IPOs are equity_in; US stocks, ETFs and IPOs held directly are us_stock; US/international funds bought through an Indian fund house are intl_fund). In the reply, give the after-tax amount in hand and the main tax line, mention that market returns are assumptions, and leave the full breakdown to the card. These are projections and suggestions; the user decides.
-7. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
+7. Holdings (investments the user owns, not new spending): when the user says they hold or bought an investment, call add_holding; for changes call update_holding or remove_holding. For an Indian mutual fund call search_mutual_funds first and choose the Direct Growth plan unless the user says Regular/IDCW; if several schemes still fit, ask. For US stocks/ETFs use the ticker (search_us_stocks if unsure) and the number of shares. Never invent units, values or rates; ask for what's missing. Questions about net worth, holdings or gains: call get_portfolio (and show_card "portfolio"). Buying an investment with this month's money is ALSO a savings transaction; only log it if the user describes it as new money moved this month.
+8. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Write rupees in Indian style (₹21,71,499 or ₹21.7L). Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
 Lines starting with "[Applied: ...]" or "[Undone by user: ...]" in earlier turns are added by the app to record what is actually saved. Never write them yourself.`;
 }
 
@@ -83,7 +86,8 @@ export async function runAssistant({ userMessage, history, state, currency, apiK
     throw new Error('NO_API_KEY');
   }
 
-  const pending = { idBase: Date.now(), transactions: [], transactionEdits: [], deleteTransactionIds: [], planUpdate: null, card: null, calcs: [] };
+  const pending = { idBase: Date.now(), transactions: [], transactionEdits: [], deleteTransactionIds: [], planUpdate: null, card: null, calcs: [],
+    holdingsAdded: [], holdingEdits: [], holdingRemoveIds: [] };
   const toolCalls = [];
   const contents = [...history, { role: 'user', parts: [{ text: userMessage }] }];
   const request = {
@@ -97,10 +101,13 @@ export async function runAssistant({ userMessage, history, state, currency, apiK
     const content = await generate(apiKey, { ...request, contents });
     const calls = content.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
     if (calls.length === 0) {
+      // The model sometimes copies the app's history markers; they belong to
+      // the app, so strip them from what it says.
       const reply = content.parts
         .filter((p) => p.text && !p.thought)
         .map((p) => p.text)
         .join('')
+        .replace(/\s*\[(Applied|Undone by user):[^\]]*\]/g, '')
         .trim();
       return { ...pending, reply, toolCalls };
     }

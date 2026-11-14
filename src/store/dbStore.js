@@ -4,6 +4,8 @@ import { persist } from 'zustand/middleware';
 import { API_KEY_STORAGE, DEFAULT_PLAN, SAMPLE_TRANSACTIONS, currentMonth } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
 import { createIdbStorage } from './idbStorage';
+import { refreshPrices } from '../lib/portfolio';
+import { useSettingsStore } from './settingsStore';
 
 function readStoredApiKey() {
   try {
@@ -13,12 +15,15 @@ function readStoredApiKey() {
   }
 }
 
-// Budget data (transactions, plan, currency) persisted to IndexedDB. The API
-// key lives in localStorage instead and is excluded from the persisted state.
+// Budget data (transactions, plan, currency, holdings) persisted to IndexedDB.
+// The API key lives in localStorage instead and is excluded from the persisted
+// state.
 export const useDbStore = create(
   persist(
-    (set) => ({
+    (set, get) => ({
       transactions: SAMPLE_TRANSACTIONS,
+      holdings: [],
+      priceErrors: [],
       plan: DEFAULT_PLAN,
       currency: '₹',
       apiKey: readStoredApiKey(),
@@ -27,8 +32,26 @@ export const useDbStore = create(
       deleteTransaction: (id) => set((s) => ({ transactions: s.transactions.filter((t) => t.id !== id) })),
       clearTransactions: () => set({ transactions: [] }),
       setPlan: (plan) => set({ plan }),
-      // Replace transactions and plan together, so a chat reply lands as one update
-      applyBudget: ({ transactions, plan }) => set({ transactions, plan }),
+      // Replace transactions, plan and holdings together, so a chat reply lands as one update
+      applyBudget: ({ transactions, plan, holdings }) =>
+        set(holdings ? { transactions, plan, holdings } : { transactions, plan }),
+      removeHolding: (id) => set((s) => ({ holdings: s.holdings.filter((h) => h.id !== id) })),
+      // Fetch prices for stale holdings (or all, with force) and save them
+      refreshPrices: async (force = false) => {
+        const { holdings } = get();
+        if (holdings.length === 0) return;
+        const { finnhubKey } = useSettingsStore.getState();
+        const result = await refreshPrices(holdings, { finnhubKey, force });
+        // Merge by id in case holdings changed while prices were loading
+        const fresh = new Map(result.holdings.map((h) => [h.id, h]));
+        set((s) => ({
+          holdings: s.holdings.map((h) => {
+            const f = fresh.get(h.id);
+            return f && f.priceFetchedAt !== h.priceFetchedAt ? { ...h, ...f } : h;
+          }),
+          priceErrors: result.errors
+        }));
+      },
       setCategoryLimit: (category, limit) =>
         set((s) => ({
           plan: { ...s.plan, categoryLimits: { ...s.plan.categoryLimits, [category]: limit } }
@@ -49,7 +72,7 @@ export const useDbStore = create(
     {
       name: 'finchat-budget',
       storage: createIdbStorage(['transactions', 'plan', 'currency']),
-      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency })
+      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings })
     }
   )
 );

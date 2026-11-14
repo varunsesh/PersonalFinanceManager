@@ -50,7 +50,8 @@ function grow(list, months, ratePct) {
   });
 }
 
-function capitalGainsTax(instrument, lots, slabPct) {
+// Tax lines for a set of lots ({ gain, heldMonths }) sold together.
+export function capitalGainsTax(instrument, lots, slabPct) {
   const lines = [];
   const sum = (arr) => arr.reduce((s, l) => s + Math.max(0, l.gain), 0);
 

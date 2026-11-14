@@ -4,6 +4,7 @@ import DataControls from '../components/DataControls';
 import DonutChart from '../components/DonutChart';
 import KpiCards from '../components/KpiCards';
 import LedgerCard from '../components/LedgerCard';
+import PortfolioSection from '../components/PortfolioSection';
 import { useBudgetMetrics, useDbStore } from '../store/dbStore';
 
 const monthLabel = (month) =>
@@ -17,6 +18,7 @@ export default function Dashboard() {
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-5xl w-full mx-auto p-3 sm:p-4 space-y-4 pb-10">
         <DataControls />
+        <PortfolioSection />
         <h2 className="px-1 text-sm font-semibold text-slate-700">{monthLabel(metrics.month)}</h2>
         <KpiCards />
 

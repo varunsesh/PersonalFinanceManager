@@ -1,16 +1,18 @@
 import { CATEGORIES } from './constants';
 import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './validation';
+import { currentValue, portfolioSummary } from './portfolio';
 
 const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})`;
 
 // Turn a validated Gemini result into the next budget state, plus a record of
 // exactly what changed so the reply can be undone later. New ids derive from
 // result.idBase so repeated runs over the same result produce the same ids.
-//   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null }
-export function applyAssistantResult(result, { transactions, plan }, fmt) {
+//   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null,
+//               holdings: { added: [h], edited: [{ before, after }], removed: [h] } }
+export function applyAssistantResult(result, { transactions, plan, holdings = [] }, fmt) {
   const badges = [];
   const skipped = [];
-  const changes = { added: [], edited: [], deleted: [], plan: null };
+  const changes = { added: [], edited: [], deleted: [], plan: null, holdings: { added: [], edited: [], removed: [] } };
   let nextTransactions = transactions;
   let nextPlan = plan;
   const byId = new Map(transactions.map((t) => [t.id, t]));
@@ -80,16 +82,58 @@ export function applyAssistantResult(result, { transactions, plan }, fmt) {
     }
   }
 
+  // Holdings arrive already priced from the tools; ids are checked here again
+  // against the current state in case it changed during the request.
+  let nextHoldings = holdings;
+  const holdingIds = new Set(holdings.map((h) => h.id));
+  const removeIds = new Set((result.holdingRemoveIds ?? []).filter((id) => holdingIds.has(id)));
+  const holdingEdits = new Map(
+    (result.holdingEdits ?? []).filter((e) => holdingIds.has(e.before.id) && !removeIds.has(e.before.id)).map((e) => [e.before.id, e])
+  );
+  const describeHolding = (h) => {
+    const v = currentValue(h);
+    return v != null ? `${h.name} (${fmt(v)})` : h.name;
+  };
+  if (removeIds.size || holdingEdits.size || result.holdingsAdded?.length) {
+    nextHoldings = holdings
+      .filter((h) => {
+        if (!removeIds.has(h.id)) return true;
+        changes.holdings.removed.push(h);
+        badges.push(`Removed holding ${h.name}`);
+        return false;
+      })
+      .map((h) => {
+        const e = holdingEdits.get(h.id);
+        if (!e) return h;
+        changes.holdings.edited.push(e);
+        badges.push(`Updated ${describeHolding(e.after)}`);
+        return e.after;
+      });
+    (result.holdingsAdded ?? []).forEach((h) => {
+      changes.holdings.added.push(h);
+      badges.push(`Added ${describeHolding(h)}`);
+    });
+    nextHoldings = [...nextHoldings, ...changes.holdings.added];
+  }
+
+  const holdingsChanged = changes.holdings.added.length + changes.holdings.edited.length + changes.holdings.removed.length > 0;
   const changed =
-    changes.added.length + changes.edited.length + changes.deleted.length > 0 || changes.plan !== null;
-  return { transactions: nextTransactions, plan: nextPlan, badges, skipped, changes: changed ? changes : null };
+    changes.added.length + changes.edited.length + changes.deleted.length > 0 || changes.plan !== null || holdingsChanged;
+  return {
+    transactions: nextTransactions,
+    plan: nextPlan,
+    holdings: nextHoldings,
+    badges,
+    skipped,
+    changes: changed ? changes : null
+  };
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Reverse a recorded set of changes against the *current* state. Anything the
 // user has changed again since then is left alone.
-export function undoChanges(changes, { transactions, plan }) {
+export function undoChanges(changes, { transactions, plan, holdings = [] }) {
   const addedIds = new Set(changes.added.map((t) => t.id));
   const editedBefore = new Map(changes.edited.map(({ before, after }) => [after.id, { before, after }]));
 
@@ -118,8 +162,28 @@ export function undoChanges(changes, { transactions, plan }) {
     });
   }
 
-  return { transactions: nextTransactions, plan: nextPlan };
+  let nextHoldings = holdings;
+  if (changes.holdings) {
+    const added = new Set(changes.holdings.added.map((h) => h.id));
+    const edited = new Map(changes.holdings.edited.map(({ before, after }) => [after.id, { before, after }]));
+    nextHoldings = holdings
+      .filter((h) => !added.has(h.id))
+      .map((h) => {
+        const e = edited.get(h.id);
+        // Prices refresh in the background, so compare everything but price fields
+        return e && sameIgnoringPrice(h, e.after) ? { ...e.before, ...priceFields(h) } : h;
+      });
+    const present = new Set(nextHoldings.map((h) => h.id));
+    nextHoldings = [...nextHoldings, ...changes.holdings.removed.filter((h) => !present.has(h.id))];
+  }
+
+  return { transactions: nextTransactions, plan: nextPlan, holdings: nextHoldings };
 }
+
+const PRICE_KEYS = ['price', 'priceDate', 'priceFetchedAt', 'fxRate'];
+const priceFields = (h) => Object.fromEntries(PRICE_KEYS.filter((k) => k in h).map((k) => [k, h[k]]));
+const withoutPrice = (h) => Object.fromEntries(Object.entries(h).filter(([k]) => !PRICE_KEYS.includes(k)));
+const sameIgnoringPrice = (a, b) => same(withoutPrice(a), withoutPrice(b));
 
 const WARN_AT = 0.8;
 const NO_LIMIT_WARNINGS = new Set(['Savings & Investments', 'Salary & Income']);
@@ -151,8 +215,25 @@ export function budgetAlerts(before, after, plan, fmt) {
 
 // Data for an inline chat card, captured when the reply is made so the card
 // keeps showing what the reply talked about.
-export function buildCard(type, metrics, plan) {
+export function buildCard(type, metrics, plan, { holdings = [], slabPct = 30 } = {}) {
   if (!CARD_TYPES.includes(type) || type === 'none') return null;
+  if (type === 'portfolio') {
+    const p = portfolioSummary(holdings, slabPct);
+    return {
+      type,
+      month: metrics.month,
+      data: {
+        asOf: p.asOf,
+        total: p.total,
+        invested: p.invested,
+        gain: p.gain,
+        exitTax: p.exitTax,
+        afterTaxIfSold: p.afterTaxIfSold,
+        allocation: p.allocation,
+        holdings: [...p.holdings].sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).slice(0, 6)
+      }
+    };
+  }
   if (type === 'summary') {
     return {
       type,
