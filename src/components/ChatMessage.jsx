@@ -1,6 +1,9 @@
-import { Bot, CheckCircle2, User } from 'lucide-react';
+import { AlertTriangle, Bot, CheckCircle2, RotateCcw, User } from 'lucide-react';
+import ChatCard from './ChatCard';
 
-export default function ChatMessage({ message: m, onBadgeClick }) {
+export default function ChatMessage({ message: m, onBadgeClick, onUndo }) {
+  const canUndo = Boolean(m.changes) && !m.undone;
+
   return (
     <div className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
@@ -20,21 +23,55 @@ export default function ChatMessage({ message: m, onBadgeClick }) {
         >
           {m.text}
         </div>
+
+        {m.card && <ChatCard card={m.card} />}
+
         {m.badges && m.badges.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {m.badges.map((b, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={onBadgeClick}
-                className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-colors"
+                disabled={m.undone}
+                className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border transition-colors ${
+                  m.undone
+                    ? 'bg-slate-50 text-slate-400 border-slate-200 line-through'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                }`}
               >
                 <CheckCircle2 className="w-3 h-3" />
                 {b}
               </button>
             ))}
+            {canUndo && (
+              <button
+                type="button"
+                onClick={() => onUndo(m.id)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Undo
+              </button>
+            )}
+            {m.undone && <span className="text-[11px] font-medium text-slate-400">Undone</span>}
           </div>
         )}
+
+        {!m.undone && m.alerts && m.alerts.length > 0 && (
+          <div className="space-y-1">
+            {m.alerts.map((a, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-800"
+              >
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+                <span>{a}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className={`text-[10px] text-slate-400 ${m.role === 'user' ? 'text-right' : 'text-left'}`}>
           {m.timestamp}
         </div>

@@ -1,5 +1,5 @@
 import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Wallet } from 'lucide-react';
-import { TODAY } from '../lib/constants';
+import { today } from '../lib/constants';
 import { useChatStore } from '../store/chatStore';
 import { useDbStore } from '../store/dbStore';
 
@@ -15,7 +15,7 @@ function exportJSON() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `finchat-budget-${TODAY}.json`;
+  a.download = `finchat-budget-${today()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }

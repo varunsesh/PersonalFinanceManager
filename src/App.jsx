@@ -22,14 +22,14 @@ export default function App() {
 
   if (!hydrated) {
     return (
-      <div className="h-[100dvh] bg-slate-50 flex items-center justify-center text-sm text-slate-400">
+      <div className="h-full bg-slate-50 flex items-center justify-center text-sm text-slate-400">
         Loading your budget…
       </div>
     );
   }
 
   return (
-    <div className="h-[100dvh] bg-slate-50 text-slate-900 flex flex-col font-sans overflow-hidden">
+    <div className="h-full bg-slate-50 text-slate-900 flex flex-col font-sans overflow-hidden">
       <Header
         activeView={activeView}
         onChangeView={changeView}

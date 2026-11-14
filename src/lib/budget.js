@@ -1,11 +1,14 @@
-import { BUCKET_META, CATEGORY_COLORS } from './constants';
+import { BUCKET_META, CATEGORY_COLORS, currentMonth } from './constants';
 
 export function formatMoney(val, currency) {
   const num = Number(val) || 0;
   return `${currency}${num.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
-export function computeMetrics(transactions, plan) {
+// Totals for one month (YYYY-MM, default the current month), since the plan's
+// income target and 50/30/20 split are monthly. Older transactions stay in
+// the ledger but don't count here.
+export function computeMetrics(transactions, plan, month = currentMonth()) {
   let totalIncome = 0;
   let totalExpenses = 0;
   let totalSavings = 0;
@@ -13,6 +16,7 @@ export function computeMetrics(transactions, plan) {
   const byCategory = {};
 
   transactions.forEach((tx) => {
+    if (!String(tx.date).startsWith(month)) return;
     const amt = Number(tx.amount) || 0;
     if (tx.type === 'income' || tx.bucket === 'income') {
       totalIncome += amt;
@@ -48,6 +52,7 @@ export function computeMetrics(transactions, plan) {
     .sort((a, b) => b.value - a.value);
 
   return {
+    month,
     totalIncome,
     totalExpenses,
     totalSavings,

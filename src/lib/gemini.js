@@ -1,8 +1,9 @@
-import { CATEGORIES, TODAY } from './constants';
+import { CATEGORIES, currentMonth, today } from './constants';
 
 const HISTORY_TURNS = 10;
 const RATIO_KEYS = ['needs', 'wants', 'savings'];
 const TX_TYPES = ['expense', 'income', 'savings'];
+export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories'];
 
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -27,7 +28,7 @@ export function normalizeTransaction(t) {
     type: t.type,
     bucket,
     category,
-    date: isValidDate(t.date) ? t.date : TODAY
+    date: isValidDate(t.date) ? t.date : today()
   };
 }
 
@@ -102,6 +103,7 @@ export function applyPlanUpdate(prev, pu, fmt) {
 export function buildBudgetSnapshot(plan, metrics, transactions) {
   return {
     plan,
+    month: metrics.month,
     totals: {
       income: metrics.totalIncome,
       expenses: metrics.totalExpenses,
@@ -119,7 +121,8 @@ export function buildBudgetSnapshot(plan, metrics, transactions) {
       spent: metrics.byCategory[c] || 0,
       limit: plan.categoryLimits[c] ?? null
     })),
-    recentTransactions: transactions.slice(0, 15).map(({ id, ...rest }) => rest)
+    // ids let the model refer to existing transactions when editing or deleting
+    recentTransactions: transactions.slice(0, 25)
   };
 }
 
@@ -132,7 +135,8 @@ export function toGeminiHistory(messages) {
     .slice(-HISTORY_TURNS)
     .forEach((m) => {
       const role = m.role === 'user' ? 'user' : 'model';
-      const text = m.badges?.length ? `${m.text}\n[Applied: ${m.badges.join('; ')}]` : m.text;
+      let text = m.badges?.length ? `${m.text}\n[Applied: ${m.badges.join('; ')}]` : m.text;
+      if (m.undone) text += '\n[Undone by user: none of the above changes are in effect]';
       const last = turns[turns.length - 1];
       if (last?.role === role) last.parts[0].text += `\n\n${text}`;
       else turns.push({ role, parts: [{ text }] });
@@ -148,10 +152,11 @@ export async function callGeminiBudgetParser({ userMessage, history, snapshot, c
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
 
+  const date = today();
   const systemInstruction = `You are FinChat, an intelligent personal finance and budgeting assistant embedded inside a local-first mobile budget tracker.
-Today's date is ${TODAY}. Active currency symbol is "${currency}".
+Today's date is ${date}. Active currency symbol is "${currency}".
 
-Current budget snapshot (computed by the app across all logged transactions):
+Current budget snapshot. Totals, buckets and categories cover the current month (${currentMonth()}) only; recentTransactions may include earlier months:
 ${JSON.stringify(snapshot)}
 
 Your job:
@@ -161,16 +166,17 @@ Your job:
    - bucket: "needs" or "wants" for expenses; "income" for income; "savings" for savings
    - category: MUST be one of: ${CATEGORIES.join(', ')}
    - amount: a positive number in currency units, without symbols
-   - date: YYYY-MM-DD (default to "${TODAY}" unless the user specifies otherwise)
+   - date: YYYY-MM-DD (default to "${date}" unless the user specifies otherwise)
 3. Transactions vs. plan updates:
    - Any statement that money was or is being spent, earned, received, saved, invested or transferred is a TRANSACTION, even when phrased as a habit ("I save 12k a month in PPF", "I put 50k a year into NPS", "my salary is 1.5L").
    - Change the plan ONLY when the user explicitly asks to set or change a target, limit, budget or split ("set dining limit to 8000", "make my income target 1.5L", "change the split to 50/25/25"). Never change a category limit just because the user logged money in that category.
    - For a recurring amount, log ONE transaction for the current month. Convert yearly amounts to a monthly amount (divide by 12 and round) and say so in the reply. Never log future months.
    - Log each separate amount in a message as its own transaction.
-4. For plan updates, include ONLY the fields the user asked to change. For the needs/wants/savings split, return only the ratios the user mentioned; the app rebalances the others to total 100.
-5. If the user asks about their spending or budget health, answer using the numbers in the snapshot. Do not invent figures.
-6. Give a warm, concise "reply" that only describes what you actually put in "transactions" and "planUpdate".
-Lines starting with "[Applied: ...]" in earlier turns are added by the app to record what was actually saved. Never write them yourself.`;
+4. Corrections: when the user corrects or removes something already logged ("that was 450 not 480", "delete the uber one", "undo the coffee"), use "transactionEdits" or "deleteTransactionIds" with the id from recentTransactions. Never log a new transaction to fix an old one. If it's unclear which transaction they mean, ask instead of guessing.
+5. For plan updates, include ONLY the fields the user asked to change. For the needs/wants/savings split, return only the ratios the user mentioned; the app rebalances the others to total 100.
+6. If the user asks about their spending or budget health, answer using the numbers in the snapshot. Do not invent figures. Set "card" to show the numbers visually: "summary" for overall income/spending/savings, "buckets" for the needs/wants/savings split, "categories" for category spending vs. limits. Otherwise use "none".
+7. Give a warm, concise "reply" that only describes what you actually put in "transactions", "transactionEdits", "deleteTransactionIds" and "planUpdate". The app shows budget-limit warnings itself, so don't repeat them.
+Lines starting with "[Applied: ...]" or "[Undone by user: ...]" in earlier turns are added by the app to record what is actually saved. Never write them yourself.`;
 
   const responseSchema = {
     type: 'OBJECT',
@@ -194,6 +200,33 @@ Lines starting with "[Applied: ...]" in earlier turns are added by the app to re
           },
           required: ['description', 'amount', 'type', 'bucket', 'category', 'date']
         }
+      },
+      transactionEdits: {
+        type: 'ARRAY',
+        description: 'Corrections to existing transactions. Include only the fields that change.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            id: { type: 'STRING', description: 'id from recentTransactions' },
+            description: { type: 'STRING', nullable: true },
+            amount: { type: 'NUMBER', nullable: true },
+            type: { type: 'STRING', enum: TX_TYPES, nullable: true },
+            bucket: { type: 'STRING', enum: ['needs', 'wants', 'savings', 'income'], nullable: true },
+            category: { type: 'STRING', enum: CATEGORIES, nullable: true },
+            date: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD' }
+          },
+          required: ['id']
+        }
+      },
+      deleteTransactionIds: {
+        type: 'ARRAY',
+        description: 'ids from recentTransactions to remove.',
+        items: { type: 'STRING' }
+      },
+      card: {
+        type: 'STRING',
+        enum: CARD_TYPES,
+        description: 'Visual card to show under the reply.'
       },
       planUpdate: {
         type: 'OBJECT',

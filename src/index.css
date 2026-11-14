@@ -1,8 +1,22 @@
 @import "tailwindcss";
 
+/* The body is exactly one screen tall, with the system bars' insets inside it,
+   so the document itself never scrolls; only the chat feed and dashboard do. */
+html,
 body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  box-sizing: border-box;
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+
+#root {
+  height: 100%;
 }

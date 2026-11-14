@@ -6,6 +6,9 @@ import KpiCards from '../components/KpiCards';
 import LedgerCard from '../components/LedgerCard';
 import { useBudgetMetrics, useDbStore } from '../store/dbStore';
 
+const monthLabel = (month) =>
+  new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: 'long', year: 'numeric' });
+
 export default function Dashboard() {
   const metrics = useBudgetMetrics();
   const ratios = useDbStore((s) => s.plan.ratios);
@@ -14,6 +17,7 @@ export default function Dashboard() {
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-5xl w-full mx-auto p-3 sm:p-4 space-y-4 pb-10">
         <DataControls />
+        <h2 className="px-1 text-sm font-semibold text-slate-700">{monthLabel(metrics.month)}</h2>
         <KpiCards />
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

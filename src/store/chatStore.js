@@ -2,19 +2,15 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { INITIAL_MESSAGES, nowTime } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
-import {
-  applyPlanUpdate,
-  buildBudgetSnapshot,
-  callGeminiBudgetParser,
-  normalizeTransaction,
-  toGeminiHistory
-} from '../lib/gemini';
+import { applyAssistantResult, budgetAlerts, buildCard, undoChanges } from '../lib/assistantActions';
+import { buildBudgetSnapshot, callGeminiBudgetParser, toGeminiHistory } from '../lib/gemini';
 import { createIdbStorage } from './idbStorage';
 import { useDbStore } from './dbStore';
 
 // Chat messages (persisted) plus transient send state. sendMessage writes any
-// parsed transactions and plan changes straight into dbStore, so every view
-// subscribed to dbStore updates as soon as the reply is applied.
+// parsed changes straight into dbStore, so every view subscribed to dbStore
+// updates as soon as the reply is applied. Each assistant message keeps a
+// record of what it changed (`changes`) so it can be undone.
 export const useChatStore = create(
   persist(
     (set, get) => ({
@@ -46,46 +42,26 @@ export const useChatStore = create(
           // Re-read: the budget may have changed while the request was in flight.
           const db = useDbStore.getState();
           const fmt = (v) => formatMoney(v, db.currency);
-          const loggedBadges = [];
-          const skipped = [];
-          let changed = false;
-
-          if (Array.isArray(result.transactions) && result.transactions.length > 0) {
-            const newTxs = [];
-            result.transactions.forEach((raw, idx) => {
-              const t = normalizeTransaction(raw);
-              if (!t) {
-                skipped.push(`transaction "${raw?.description ?? 'unknown'}" had an invalid amount or type`);
-                return;
-              }
-              newTxs.push({ id: `tx-${Date.now()}-${idx}`, ...t });
-              loggedBadges.push(`${t.type === 'income' ? '+' : '-'}${fmt(t.amount)} (${t.category})`);
-            });
-            if (newTxs.length > 0) {
-              db.addTransactions(newTxs);
-              changed = true;
-            }
-          }
-
-          if (result.planUpdate) {
-            const update = applyPlanUpdate(db.plan, result.planUpdate, fmt);
-            loggedBadges.push(...update.applied);
-            skipped.push(...update.skipped);
-            if (update.applied.length > 0) {
-              db.setPlan(update.plan);
-              changed = true;
-            }
-          }
+          const applied = applyAssistantResult(result, db, fmt);
+          const before = computeMetrics(db.transactions, db.plan);
+          const after = computeMetrics(applied.transactions, applied.plan);
+          if (applied.changes) db.applyBudget(applied);
 
           const reply = typeof result.reply === 'string' && result.reply.trim() ? result.reply : 'Done.';
           const aiMsg = {
             id: `msg-${Date.now() + 1}`,
             role: 'assistant',
             timestamp: nowTime(),
-            text: skipped.length > 0 ? `${reply}\n\n⚠️ Not applied: ${skipped.join('; ')}.` : reply,
-            badges: loggedBadges
+            text: applied.skipped.length > 0 ? `${reply}\n\n⚠️ Not applied: ${applied.skipped.join('; ')}.` : reply,
+            badges: applied.badges,
+            changes: applied.changes,
+            alerts: budgetAlerts(before, after, applied.plan, fmt),
+            card: buildCard(result.card, after, applied.plan)
           };
-          set((s) => ({ messages: [...s.messages, aiMsg], hasNewUpdates: s.hasNewUpdates || changed }));
+          set((s) => ({
+            messages: [...s.messages, aiMsg],
+            hasNewUpdates: s.hasNewUpdates || applied.changes !== null
+          }));
         } catch (err) {
           const errorMsg = {
             id: `msg-${Date.now() + 1}`,
@@ -98,6 +74,17 @@ export const useChatStore = create(
         } finally {
           set({ isSending: false });
         }
+      },
+
+      undoMessage: (id) => {
+        const msg = get().messages.find((m) => m.id === id);
+        if (!msg?.changes || msg.undone) return;
+        const db = useDbStore.getState();
+        db.applyBudget(undoChanges(msg.changes, db));
+        set((s) => ({
+          messages: s.messages.map((m) => (m.id === id ? { ...m, undone: true } : m)),
+          hasNewUpdates: true
+        }));
       }
     }),
     {

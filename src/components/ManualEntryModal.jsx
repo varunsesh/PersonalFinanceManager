@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { CATEGORIES, TODAY } from '../lib/constants';
+import { CATEGORIES, today } from '../lib/constants';
 import { useDbStore } from '../store/dbStore';
 
-const EMPTY_FORM = {
+const emptyForm = () => ({
   description: '',
   amount: '',
   type: 'expense',
   bucket: 'needs',
   category: 'Groceries',
-  date: TODAY
-};
+  date: today()
+});
 
 export default function ManualEntryModal({ onClose }) {
   const currency = useDbStore((s) => s.currency);
   const addTransactions = useDbStore((s) => s.addTransactions);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(emptyForm);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -28,7 +28,7 @@ export default function ManualEntryModal({ onClose }) {
     addTransactions([
       {
         id: `tx-${Date.now()}`,
-        date: form.date || TODAY,
+        date: form.date || today(),
         description: form.description.trim(),
         amount: amt,
         type: form.type,
@@ -112,6 +112,26 @@ export default function ManualEntryModal({ onClose }) {
               </select>
             </div>
           </div>
+
+          {form.type === 'expense' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Bucket</label>
+              <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-xl">
+                {['needs', 'wants'].map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => setForm({ ...form, bucket: b })}
+                    className={`py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      form.bucket === b ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
+                    }`}
+                  >
+                    {b === 'needs' ? 'Needs' : 'Wants'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button

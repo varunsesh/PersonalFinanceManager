@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { API_KEY_STORAGE, DEFAULT_PLAN, SAMPLE_TRANSACTIONS } from '../lib/constants';
+import { API_KEY_STORAGE, DEFAULT_PLAN, SAMPLE_TRANSACTIONS, currentMonth } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
 import { createIdbStorage } from './idbStorage';
 
@@ -27,6 +27,8 @@ export const useDbStore = create(
       deleteTransaction: (id) => set((s) => ({ transactions: s.transactions.filter((t) => t.id !== id) })),
       clearTransactions: () => set({ transactions: [] }),
       setPlan: (plan) => set({ plan }),
+      // Replace transactions and plan together, so a chat reply lands as one update
+      applyBudget: ({ transactions, plan }) => set({ transactions, plan }),
       setCategoryLimit: (category, limit) =>
         set((s) => ({
           plan: { ...s.plan, categoryLimits: { ...s.plan.categoryLimits, [category]: limit } }
@@ -55,7 +57,8 @@ export const useDbStore = create(
 export function useBudgetMetrics() {
   const transactions = useDbStore((s) => s.transactions);
   const plan = useDbStore((s) => s.plan);
-  return useMemo(() => computeMetrics(transactions, plan), [transactions, plan]);
+  const month = currentMonth();
+  return useMemo(() => computeMetrics(transactions, plan, month), [transactions, plan, month]);
 }
 
 export function useFormatMoney() {

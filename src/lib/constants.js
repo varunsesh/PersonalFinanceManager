@@ -49,15 +49,27 @@ export const DEFAULT_PLAN = {
   }
 };
 
-export const TODAY = new Date().toISOString().slice(0, 10);
+// Local calendar date as YYYY-MM-DD. A function, not a constant, so it stays
+// correct when the app is left open past midnight. (toISOString() is UTC,
+// which in India gives yesterday's date before 5:30 AM.)
+export function today() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Current month as YYYY-MM.
+export const currentMonth = () => today().slice(0, 7);
+
+const SAMPLE_DATE = today();
 
 export const SAMPLE_TRANSACTIONS = [
-  { id: 'tx-1', date: TODAY, description: 'Monthly Salary Credit', amount: 120000, type: 'income', bucket: 'income', category: 'Salary & Income' },
-  { id: 'tx-2', date: TODAY, description: 'Apartment Rent', amount: 30000, type: 'expense', bucket: 'needs', category: 'Housing & Rent' },
-  { id: 'tx-3', date: TODAY, description: 'Index Fund SIP Auto-Debit', amount: 20000, type: 'savings', bucket: 'savings', category: 'Savings & Investments' },
-  { id: 'tx-4', date: TODAY, description: 'Weekly Organic Groceries', amount: 4200, type: 'expense', bucket: 'needs', category: 'Groceries' },
-  { id: 'tx-5', date: TODAY, description: 'Specialty Coffee & Dinner Out', amount: 2450, type: 'expense', bucket: 'wants', category: 'Dining & Coffee' },
-  { id: 'tx-6', date: TODAY, description: 'Electricity & Fiber Internet', amount: 3100, type: 'expense', bucket: 'needs', category: 'Utilities & Bills' }
+  { id: 'tx-1', date: SAMPLE_DATE, description: 'Monthly Salary Credit', amount: 120000, type: 'income', bucket: 'income', category: 'Salary & Income' },
+  { id: 'tx-2', date: SAMPLE_DATE, description: 'Apartment Rent', amount: 30000, type: 'expense', bucket: 'needs', category: 'Housing & Rent' },
+  { id: 'tx-3', date: SAMPLE_DATE, description: 'Index Fund SIP Auto-Debit', amount: 20000, type: 'savings', bucket: 'savings', category: 'Savings & Investments' },
+  { id: 'tx-4', date: SAMPLE_DATE, description: 'Weekly Organic Groceries', amount: 4200, type: 'expense', bucket: 'needs', category: 'Groceries' },
+  { id: 'tx-5', date: SAMPLE_DATE, description: 'Specialty Coffee & Dinner Out', amount: 2450, type: 'expense', bucket: 'wants', category: 'Dining & Coffee' },
+  { id: 'tx-6', date: SAMPLE_DATE, description: 'Electricity & Fiber Internet', amount: 3100, type: 'expense', bucket: 'needs', category: 'Utilities & Bills' }
 ];
 
 export const nowTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
