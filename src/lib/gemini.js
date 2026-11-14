@@ -1,0 +1,243 @@
+import { CATEGORIES, TODAY } from './constants';
+
+const HISTORY_TURNS = 10;
+const RATIO_KEYS = ['needs', 'wants', 'savings'];
+const TX_TYPES = ['expense', 'income', 'savings'];
+
+const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
+
+function isValidDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !isNaN(d) && d.toISOString().slice(0, 10) === s;
+}
+
+// Coerce one model-produced transaction into a consistent shape. `type` is the
+// source of truth: income/savings always map to their own bucket, and expenses
+// can only be needs or wants. Returns null if the entry is unusable.
+export function normalizeTransaction(t) {
+  const amount = Math.abs(Number(t?.amount));
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  if (!TX_TYPES.includes(t.type)) return null;
+  const bucket = t.type === 'expense' ? (t.bucket === 'wants' ? 'wants' : 'needs') : t.type;
+  const category = CATEGORIES.includes(t.category) ? t.category : 'Other';
+  return {
+    description: String(t.description || '').trim() || category,
+    amount,
+    type: t.type,
+    bucket,
+    category,
+    date: isValidDate(t.date) ? t.date : TODAY
+  };
+}
+
+// Apply a model-produced plan update to `prev` without mutating it. Partial
+// ratio changes keep the given values and rebalance the rest proportionally so
+// the split always totals 100. Returns what was applied and what was rejected.
+export function applyPlanUpdate(prev, pu, fmt) {
+  const next = { ...prev, ratios: { ...prev.ratios }, categoryLimits: { ...prev.categoryLimits } };
+  const applied = [];
+  const skipped = [];
+
+  if (pu.monthlyIncomeTarget != null) {
+    if (isFiniteNumber(pu.monthlyIncomeTarget) && pu.monthlyIncomeTarget > 0) {
+      next.monthlyIncomeTarget = pu.monthlyIncomeTarget;
+      applied.push(`Income Target: ${fmt(pu.monthlyIncomeTarget)}`);
+    } else {
+      skipped.push(`income target of ${pu.monthlyIncomeTarget} is invalid`);
+    }
+  }
+
+  const given = {};
+  RATIO_KEYS.forEach((key) => {
+    const v = pu[`${key}Ratio`];
+    if (v == null) return;
+    if (isFiniteNumber(v) && v >= 0 && v <= 100) given[key] = v;
+    else skipped.push(`${key} ratio of ${v}% is invalid`);
+  });
+  const givenKeys = Object.keys(given);
+  if (givenKeys.length > 0) {
+    const givenSum = givenKeys.reduce((s, k) => s + given[k], 0);
+    const rest = RATIO_KEYS.filter((k) => !(k in given));
+    const fits = rest.length === 0 ? Math.abs(givenSum - 100) < 0.01 : givenSum <= 100;
+    if (!fits) {
+      skipped.push(
+        `split (${givenKeys.map((k) => `${k} ${given[k]}%`).join(', ')}) doesn't add up to 100%`
+      );
+    } else {
+      const ratios = { ...given };
+      const remaining = 100 - givenSum;
+      const prevRestSum = rest.reduce((s, k) => s + prev.ratios[k], 0);
+      let assigned = 0;
+      rest.forEach((k, i) => {
+        if (i === rest.length - 1) {
+          ratios[k] = remaining - assigned;
+        } else {
+          ratios[k] = Math.round(
+            prevRestSum > 0 ? (remaining * prev.ratios[k]) / prevRestSum : remaining / rest.length
+          );
+          assigned += ratios[k];
+        }
+      });
+      next.ratios = ratios;
+      applied.push(`Split: ${ratios.needs}/${ratios.wants}/${ratios.savings}`);
+    }
+  }
+
+  (pu.categoryLimitUpdates || []).forEach((item) => {
+    if (!CATEGORIES.includes(item?.category) || item.category === 'Salary & Income') {
+      skipped.push(`limit for unknown category "${item?.category}"`);
+    } else if (!isFiniteNumber(item.limit) || item.limit < 0) {
+      skipped.push(`${item.category} limit of ${item.limit} is invalid`);
+    } else {
+      next.categoryLimits[item.category] = item.limit;
+      applied.push(`${item.category} limit: ${fmt(item.limit)}`);
+    }
+  });
+
+  return { plan: applied.length > 0 ? next : prev, applied, skipped };
+}
+
+// Numbers the model needs to answer budget questions accurately.
+export function buildBudgetSnapshot(plan, metrics, transactions) {
+  return {
+    plan,
+    totals: {
+      income: metrics.totalIncome,
+      expenses: metrics.totalExpenses,
+      savings: metrics.totalSavings,
+      unallocated: metrics.netCashflow
+    },
+    buckets: metrics.bucketList.map((b) => ({
+      bucket: b.key,
+      targetPercent: b.ratio,
+      target: b.target,
+      actual: b.actual
+    })),
+    categories: CATEGORIES.filter((c) => c !== 'Salary & Income').map((c) => ({
+      category: c,
+      spent: metrics.byCategory[c] || 0,
+      limit: plan.categoryLimits[c] ?? null
+    })),
+    recentTransactions: transactions.slice(0, 15).map(({ id, ...rest }) => rest)
+  };
+}
+
+// Convert prior chat messages to Gemini turns. Badges are appended so the model
+// knows what the app actually saved, not just what it said it would save.
+export function toGeminiHistory(messages) {
+  const turns = [];
+  messages
+    .filter((m) => !m.isError)
+    .slice(-HISTORY_TURNS)
+    .forEach((m) => {
+      const role = m.role === 'user' ? 'user' : 'model';
+      const text = m.badges?.length ? `${m.text}\n[Applied: ${m.badges.join('; ')}]` : m.text;
+      const last = turns[turns.length - 1];
+      if (last?.role === role) last.parts[0].text += `\n\n${text}`;
+      else turns.push({ role, parts: [{ text }] });
+    });
+  while (turns.length > 0 && turns[0].role !== 'user') turns.shift();
+  return turns;
+}
+
+export async function callGeminiBudgetParser({ userMessage, history, snapshot, currency, apiKey }) {
+  if (!apiKey) {
+    throw new Error('NO_API_KEY');
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const systemInstruction = `You are FinChat, an intelligent personal finance and budgeting assistant embedded inside a local-first mobile budget tracker.
+Today's date is ${TODAY}. Active currency symbol is "${currency}".
+
+Current budget snapshot (computed by the app across all logged transactions):
+${JSON.stringify(snapshot)}
+
+Your job:
+1. Parse the user's LATEST message to extract any NEW financial transactions (expenses, income, or savings transfers) AND/OR updates to their budget plan. Never re-log transactions from earlier turns.
+2. Classify each transaction:
+   - type: "expense" | "income" | "savings" (money moved into savings or investments is "savings", not "expense")
+   - bucket: "needs" or "wants" for expenses; "income" for income; "savings" for savings
+   - category: MUST be one of: ${CATEGORIES.join(', ')}
+   - amount: a positive number in currency units, without symbols
+   - date: YYYY-MM-DD (default to "${TODAY}" unless the user specifies otherwise)
+3. For plan updates, include ONLY the fields the user asked to change. For the needs/wants/savings split, return only the ratios the user mentioned; the app rebalances the others to total 100.
+4. If the user asks about their spending or budget health, answer using the numbers in the snapshot. Do not invent figures.
+5. Always give a warm, concise confirmation in "reply" summarizing what you logged or updated.
+Lines starting with "[Applied: ...]" in earlier turns are added by the app to record what was actually saved. Never write them yourself.`;
+
+  const responseSchema = {
+    type: 'OBJECT',
+    properties: {
+      reply: {
+        type: 'STRING',
+        description: 'Conversational response confirming logged items, plan updates, or answering financial questions.'
+      },
+      transactions: {
+        type: 'ARRAY',
+        description: 'Zero or more new transactions extracted from the latest message.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            description: { type: 'STRING' },
+            amount: { type: 'NUMBER' },
+            type: { type: 'STRING', enum: TX_TYPES },
+            bucket: { type: 'STRING', enum: ['needs', 'wants', 'savings', 'income'] },
+            category: { type: 'STRING', enum: CATEGORIES },
+            date: { type: 'STRING', description: 'YYYY-MM-DD' }
+          },
+          required: ['description', 'amount', 'type', 'bucket', 'category', 'date']
+        }
+      },
+      planUpdate: {
+        type: 'OBJECT',
+        nullable: true,
+        description: 'Only the plan fields the user asked to change; omit everything else.',
+        properties: {
+          monthlyIncomeTarget: { type: 'NUMBER', nullable: true },
+          needsRatio: { type: 'NUMBER', nullable: true },
+          wantsRatio: { type: 'NUMBER', nullable: true },
+          savingsRatio: { type: 'NUMBER', nullable: true },
+          categoryLimitUpdates: {
+            type: 'ARRAY',
+            nullable: true,
+            items: {
+              type: 'OBJECT',
+              properties: {
+                category: { type: 'STRING', enum: CATEGORIES },
+                limit: { type: 'NUMBER' }
+              },
+              required: ['category', 'limit']
+            }
+          }
+        }
+      }
+    },
+    required: ['reply', 'transactions']
+  };
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      contents: [...history, { role: 'user', parts: [{ text: userMessage }] }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+        responseSchema
+      }
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`API error (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) throw new Error('Empty response from Gemini');
+  return JSON.parse(rawText);
+}

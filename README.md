@@ -11,8 +11,8 @@ Built with React, Vite and Tailwind CSS, and packaged as an Android app with Cap
 - **Ask questions** — get answers about spending and budget health based on your plan and recent transactions.
 - **50/30/20 tracking** — transactions are bucketed into Needs, Wants, Savings and Income.
 - **Charts** — category donut chart and bucket allocation bar chart.
-- **Transactions & plan tables** — search, filter, edit and delete entries.
-- **Local-first storage** — IndexedDB, plus JSON export/import for backups and a reset to sample data.
+- **Transactions & plan tables** — search, filter and delete transactions; edit category limits.
+- **Local-first storage** — IndexedDB, plus JSON export for backups and a reset to sample data.
 
 ## Getting started
 
@@ -53,8 +53,21 @@ App ID: `com.personal.finchat` (see `capacitor.config.json`).
 
 ```
 src/
-  App.jsx      # Storage layer, Gemini parser, charts and main UI
-  main.jsx     # React entry point
-  index.css    # Tailwind import
-android/       # Capacitor-generated Android project
+  App.jsx          # Shell: header, Chat/Dashboard switch, modals
+  pages/
+    Chat.jsx       # Chat feed, quick prompts and input
+    Dashboard.jsx  # KPIs, charts, transactions and category limits
+  components/      # UI pieces composed by the two pages
+  store/
+    dbStore.js     # Budget data (transactions, plan, currency) + API key
+    chatStore.js   # Messages and sendMessage, which writes parsed results into dbStore
+    idbStorage.js  # IndexedDB adapter for zustand persist (localStorage fallback)
+    useHydration.js
+  lib/
+    constants.js   # Categories, defaults, sample data
+    budget.js      # Metrics and money formatting
+    gemini.js      # Gemini request, response validation and plan-update merging
+android/           # Capacitor-generated Android project
 ```
+
+State lives in [zustand](https://github.com/pmndrs/zustand) stores persisted to IndexedDB, so the chat and dashboard always read the same data.
