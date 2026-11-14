@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# Android signing keys (android/ has its own .gitignore for build artifacts)
+*.jks
+*.keystore
+
+# Locally downloaded Gradle distribution (too large for git)
+android/gradle/wrapper/gradle-*-bin.zip

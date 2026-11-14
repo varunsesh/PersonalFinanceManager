@@ -1,0 +1,8 @@
+{
+  "appId": "com.personal.finchat",
+  "appName": "FinChat",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
