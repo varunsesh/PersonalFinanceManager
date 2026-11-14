@@ -1,26 +1,8 @@
 import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Settings, Wallet } from 'lucide-react';
-import { today } from '../lib/constants';
 import { useChatStore } from '../store/chatStore';
 import { useDbStore } from '../store/dbStore';
 
-function exportJSON() {
-  const { currency, plan, transactions } = useDbStore.getState();
-  const payload = {
-    exportedAt: new Date().toISOString(),
-    currency,
-    plan,
-    transactions
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `finchat-budget-${today()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpenManualEntry, onOpenSettings }) {
+export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpenManualEntry, onOpenSettings, onOpenBackup }) {
   const apiKey = useDbStore((s) => s.apiKey);
   const currency = useDbStore((s) => s.currency);
   const setCurrency = useDbStore((s) => s.setCurrency);
@@ -88,9 +70,10 @@ export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpe
             </button>
 
             <button
-              onClick={exportJSON}
+              onClick={onOpenBackup}
               className="inline-flex items-center text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 p-1.5 rounded-lg transition-colors"
-              title="Export JSON Backup"
+              title="Backup & restore"
+              aria-label="Backup and restore"
             >
               <Download className="w-3.5 h-3.5" />
             </button>

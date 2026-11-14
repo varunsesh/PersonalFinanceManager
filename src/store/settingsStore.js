@@ -20,7 +20,8 @@ export const DEFAULT_SETTINGS = {
     us_stock: 10,
     debt_mf: 7
   },
-  finnhubKey: ''
+  finnhubKey: '',
+  lastBackupAt: null
 };
 
 export const useSettingsStore = create(
@@ -31,7 +32,7 @@ export const useSettingsStore = create(
       setDefaultReturn: (instrument, pct) =>
         set((s) => ({ defaultReturns: { ...s.defaultReturns, [instrument]: pct } })),
       resetAssumptions: () => {
-        const { finnhubKey, ...assumptions } = DEFAULT_SETTINGS;
+        const { finnhubKey, lastBackupAt, ...assumptions } = DEFAULT_SETTINGS;
         set(assumptions);
       }
     }),

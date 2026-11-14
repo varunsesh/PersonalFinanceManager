@@ -3,6 +3,7 @@ import ApiKeyModal from './components/ApiKeyModal';
 import Header from './components/Header';
 import ManualEntryModal from './components/ManualEntryModal';
 import SettingsModal from './components/SettingsModal';
+import BackupModal from './components/BackupModal';
 import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
 import { useChatStore } from './store/chatStore';
@@ -16,6 +17,7 @@ export default function App() {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showBackup, setShowBackup] = useState(false);
 
   const changeView = (view) => {
     setActiveView(view);
@@ -38,6 +40,7 @@ export default function App() {
         onOpenKeyModal={() => setShowKeyModal(true)}
         onOpenManualEntry={() => setShowManualModal(true)}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenBackup={() => setShowBackup(true)}
       />
 
       {activeView === 'chat' ? (
@@ -52,6 +55,7 @@ export default function App() {
       {showKeyModal && <ApiKeyModal onClose={() => setShowKeyModal(false)} />}
       {showManualModal && <ManualEntryModal onClose={() => setShowManualModal(false)} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showBackup && <BackupModal onClose={() => setShowBackup(false)} />}
     </div>
   );
 }
