@@ -1,10 +1,11 @@
 import { CATEGORIES } from './constants';
-import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './gemini';
+import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './validation';
 
 const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})`;
 
 // Turn a validated Gemini result into the next budget state, plus a record of
-// exactly what changed so the reply can be undone later.
+// exactly what changed so the reply can be undone later. New ids derive from
+// result.idBase so repeated runs over the same result produce the same ids.
 //   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null }
 export function applyAssistantResult(result, { transactions, plan }, fmt) {
   const badges = [];
@@ -63,7 +64,7 @@ export function applyAssistantResult(result, { transactions, plan }, fmt) {
       skipped.push(`transaction "${raw?.description ?? 'unknown'}" had an invalid amount or type`);
       return;
     }
-    const tx = { id: `tx-${Date.now()}-${idx}`, ...t };
+    const tx = { id: `tx-${result.idBase ?? Date.now()}-${idx}`, ...t };
     changes.added.push(tx);
     badges.push(describe(tx, fmt));
   });

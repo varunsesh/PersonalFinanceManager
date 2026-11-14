@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import { INITIAL_MESSAGES, nowTime } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
 import { applyAssistantResult, budgetAlerts, buildCard, undoChanges } from '../lib/assistantActions';
-import { buildBudgetSnapshot, callGeminiBudgetParser, toGeminiHistory } from '../lib/gemini';
+import { runAssistant, toGeminiHistory } from '../lib/gemini';
 import { createIdbStorage } from './idbStorage';
 import { useDbStore } from './dbStore';
 
@@ -31,12 +31,13 @@ export const useChatStore = create(
         set((s) => ({ messages: [...s.messages, userMsg], isSending: true }));
 
         try {
-          const result = await callGeminiBudgetParser({
+          const result = await runAssistant({
             userMessage: text,
             history,
-            snapshot: buildBudgetSnapshot(plan, computeMetrics(transactions, plan), transactions),
+            state: { transactions, plan },
             currency,
-            apiKey
+            apiKey,
+            fmt: (v) => formatMoney(v, currency)
           });
 
           // Re-read: the budget may have changed while the request was in flight.
