@@ -1,4 +1,5 @@
-import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Settings, Wallet } from 'lucide-react';
+import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Settings } from 'lucide-react';
+import logoUrl from '../assets/logo.svg';
 import { useChatStore } from '../store/chatStore';
 import { useDbStore } from '../store/dbStore';
 
@@ -14,9 +15,7 @@ export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpe
         {/* Row 1: Brand + Controls */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm">
-              <Wallet className="w-4 h-4" />
-            </div>
+            <img src={logoUrl} alt="" className="w-8 h-8 rounded-[9px] shadow-sm" />
             <div className="flex items-center gap-1.5">
               <h1 className="font-bold text-base tracking-tight text-slate-900">FinChat</h1>
               <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">

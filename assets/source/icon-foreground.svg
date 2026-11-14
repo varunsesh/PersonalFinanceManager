@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<!-- The generator insets this image to the visible area of the adaptive icon, so the mark is drawn at full size -->
+  <!-- Chat bubble with rising bars: conversation-first finance that grows -->
+  <g>
+    <rect x="232" y="236" width="560" height="420" rx="120" fill="#ffffff"/>
+    <path d="M296 600 L276 728 L452 646 Z" fill="#ffffff" stroke="#ffffff" stroke-width="28" stroke-linejoin="round"/>
+    <rect x="362" y="446" width="76" height="120" rx="18" fill="#818cf8"/>
+    <rect x="474" y="376" width="76" height="190" rx="18" fill="#6366f1"/>
+    <rect x="586" y="306" width="76" height="260" rx="18" fill="#10b981"/>
+  </g>
+</svg>
