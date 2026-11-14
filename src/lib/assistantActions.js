@@ -10,11 +10,20 @@ const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amoun
 // exactly what changed so the reply can be undone later. New ids derive from
 // result.idBase so repeated runs over the same result produce the same ids.
 //   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null,
-//               holdings: { added, edited, removed }, goals: { added, edited, removed } }
-export function applyAssistantResult(result, { transactions, plan, holdings = [], goals = [] }, fmt) {
+//               holdings: { added, edited, removed }, goals: { added, edited, removed },
+//               memories: { added, edited, removed } }
+export function applyAssistantResult(result, { transactions, plan, holdings = [], goals = [], memories = [] }, fmt) {
   const badges = [];
   const skipped = [];
-  const changes = { added: [], edited: [], deleted: [], plan: null, holdings: emptyRecord(), goals: emptyRecord() };
+  const changes = {
+    added: [],
+    edited: [],
+    deleted: [],
+    plan: null,
+    holdings: emptyRecord(),
+    goals: emptyRecord(),
+    memories: emptyRecord()
+  };
 
   // Goals first, so transactions can be tagged with goals created this turn.
   const nextGoals = applyCollection(
@@ -117,16 +126,27 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
     { added: (h) => `Added ${describeHolding(h)}`, edited: (h) => `Updated ${describeHolding(h)}`, removed: (h) => `Removed holding ${h.name}` }
   );
 
+  const short = (m) => (m.text.length > 48 ? `${m.text.slice(0, 47)}…` : m.text);
+  const nextMemories = applyCollection(
+    memories,
+    { added: result.memoriesAdded, edits: result.memoryEdits, removeIds: result.memoryRemoveIds },
+    changes.memories,
+    badges,
+    { added: (m) => `Remembered: ${short(m)}`, edited: (m) => `Updated memory: ${short(m)}`, removed: (m) => `Forgot: ${short(m)}` }
+  );
+
   const changed =
     changes.added.length + changes.edited.length + changes.deleted.length > 0 ||
     changes.plan !== null ||
     recordSize(changes.holdings) > 0 ||
-    recordSize(changes.goals) > 0;
+    recordSize(changes.goals) > 0 ||
+    recordSize(changes.memories) > 0;
   return {
     transactions: nextTransactions,
     plan: nextPlan,
     holdings: nextHoldings,
     goals: nextGoals,
+    memories: nextMemories,
     badges,
     skipped,
     changes: changed ? changes : null
@@ -187,7 +207,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Reverse a recorded set of changes against the *current* state. Anything the
 // user has changed again since then is left alone.
-export function undoChanges(changes, { transactions, plan, holdings = [], goals = [] }) {
+export function undoChanges(changes, { transactions, plan, holdings = [], goals = [], memories = [] }) {
   const addedIds = new Set(changes.added.map((t) => t.id));
   const editedBefore = new Map(changes.edited.map(({ before, after }) => [after.id, { before, after }]));
 
@@ -220,7 +240,8 @@ export function undoChanges(changes, { transactions, plan, holdings = [], goals 
     transactions: nextTransactions,
     plan: nextPlan,
     holdings: undoCollection(holdings, changes.holdings, PRICE_KEYS),
-    goals: undoCollection(goals, changes.goals)
+    goals: undoCollection(goals, changes.goals),
+    memories: undoCollection(memories, changes.memories)
   };
 }
 

@@ -33,12 +33,12 @@ export const useChatStore = create(
         try {
           // Refresh stale holding prices first so answers use today's values
           await useDbStore.getState().refreshPrices().catch(() => {});
-          const { plan, transactions, holdings, goals, currency, apiKey } = useDbStore.getState();
+          const { plan, transactions, holdings, goals, memories, currency, apiKey } = useDbStore.getState();
           const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
-            state: { transactions, plan, holdings, goals },
+            state: { transactions, plan, holdings, goals, memories },
             currency,
             apiKey,
             fmt: (v) => formatMoney(v, currency),

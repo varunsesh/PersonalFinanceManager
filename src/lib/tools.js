@@ -8,6 +8,7 @@ import { latestNav, searchFunds } from './prices/mf';
 import { searchUsSymbols } from './prices/us';
 import { createHolding, currentValue, portfolioSummary } from './portfolio';
 import { addYears, allocatedShare, goalsOverview, goalStatus } from './goals';
+import { MAX_MEMORIES, MEMORY_TOPICS, validateMemory } from './memory';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
@@ -285,6 +286,30 @@ export const TOOL_DECLARATIONS = [
     description:
       'Every goal with target (inflation-adjusted if set), current balance, progress, required monthly investment (after tax), actual monthly pace and status (on_track, behind, done, building), plus totals and average monthly surplus.',
     parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
+    name: 'remember',
+    description:
+      'Save a lasting fact about the user so you know it in future conversations: age, family, job and employer benefits (e.g. employer NPS), risk appetite, investing preferences, plans and constraints. Write it concisely in the third person and date time-sensitive facts, e.g. "Age 30 (Nov 2026)". Not for transactions, holdings or goals (they have their own tools) and never for passwords or ID/account numbers.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { fact: { type: 'STRING' }, topic: { type: 'STRING', enum: MEMORY_TOPICS } },
+      required: ['fact']
+    }
+  },
+  {
+    name: 'update_memory',
+    description: 'Replace a remembered fact by id when it changes or was wrong.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { id: { type: 'STRING' }, fact: { type: 'STRING' }, topic: { type: 'STRING', enum: MEMORY_TOPICS } },
+      required: ['id', 'fact']
+    }
+  },
+  {
+    name: 'forget',
+    description: 'Delete remembered facts by id (when the user asks you to forget something or it no longer applies).',
+    parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
   },
   {
     name: 'show_card',
@@ -639,6 +664,40 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
     }
     case 'get_goals':
       return goalsOverview([...(state.goals ?? [])], goalCtx(state, settings));
+    case 'remember': {
+      const { text, topic, error } = validateMemory(args.fact, args.topic);
+      if (error) return { error };
+      const existing = [...(state.memories ?? []), ...pending.memoriesAdded];
+      if (existing.length >= MAX_MEMORIES) return { error: `Memory is full (${MAX_MEMORIES} facts). Ask the user what to forget.` };
+      const dupe = existing.find((m) => m.text.toLowerCase() === text.toLowerCase());
+      if (dupe) return { alreadyRemembered: dupe.id };
+      const now = new Date().toISOString();
+      const memory = { id: `mem-${pending.idBase}-${pending.memoriesAdded.length}`, text, topic, createdAt: now, updatedAt: now };
+      pending.memoriesAdded.push(memory);
+      return { remembered: { id: memory.id, text } };
+    }
+    case 'update_memory': {
+      const { text, topic, error } = validateMemory(args.fact, args.topic);
+      if (error) return { error };
+      const fresh = pending.memoriesAdded.find((m) => m.id === args.id);
+      if (fresh) {
+        Object.assign(fresh, { text, ...(args.topic && { topic }) });
+        return { updated: { id: fresh.id, text } };
+      }
+      const before = (state.memories ?? []).find((m) => m.id === args.id);
+      if (!before) return { error: `No memory with id ${args.id}` };
+      const after = { ...before, text, ...(args.topic && { topic }), updatedAt: new Date().toISOString() };
+      pending.memoryEdits = pending.memoryEdits.filter((e) => e.before.id !== before.id);
+      pending.memoryEdits.push({ before, after });
+      return { updated: { id: after.id, text } };
+    }
+    case 'forget': {
+      const list = Array.isArray(args.ids) ? args.ids : [];
+      pending.memoriesAdded = pending.memoriesAdded.filter((m) => !list.includes(m.id));
+      const known = new Set((state.memories ?? []).map((m) => m.id));
+      pending.memoryRemoveIds.push(...list.filter((id) => known.has(id)));
+      return { forgotten: list.length };
+    }
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
       pending.card = args.type;

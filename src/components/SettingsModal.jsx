@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Settings, X } from 'lucide-react';
 import { INSTRUMENTS, TAX_RULES } from '../lib/finance/taxRules';
 import { useSettingsStore } from '../store/settingsStore';
+import MemoryList from './MemoryList';
 
 const SLABS = [0, 5, 10, 15, 20, 25, 30];
 
@@ -56,6 +57,10 @@ export default function SettingsModal({ onClose }) {
         </div>
 
         <div className="space-y-5 overflow-y-auto px-5 py-4">
+          <Section title="What FinChat remembers" hint="Facts the assistant keeps across conversations. It adds them when you mention them in chat; you can also add or delete them here.">
+            <MemoryList />
+          </Section>
+
           <Section title="Tax" hint={`New regime · ${TAX_RULES.label} rules. Your slab is used for FD interest, debt funds and short-term gains on US/international investments.`}>
             <label className="flex items-center justify-between py-1.5 text-xs">
               <span className="text-slate-600">Income-tax slab</span>

@@ -15,7 +15,7 @@ function readStoredApiKey() {
   }
 }
 
-// Budget data (transactions, plan, currency, holdings, goals) persisted to IndexedDB.
+// Budget data (transactions, plan, currency, holdings, goals, memories) persisted to IndexedDB.
 // The API key lives in localStorage instead and is excluded from the persisted
 // state.
 export const useDbStore = create(
@@ -24,6 +24,7 @@ export const useDbStore = create(
       transactions: SAMPLE_TRANSACTIONS,
       holdings: [],
       goals: [],
+      memories: [],
       priceErrors: [],
       plan: DEFAULT_PLAN,
       currency: '₹',
@@ -34,8 +35,10 @@ export const useDbStore = create(
       clearTransactions: () => set({ transactions: [] }),
       setPlan: (plan) => set({ plan }),
       // Replace transactions, plan and holdings together, so a chat reply lands as one update
-      applyBudget: ({ transactions, plan, holdings, goals }) =>
-        set({ transactions, plan, ...(holdings && { holdings }), ...(goals && { goals }) }),
+      applyBudget: ({ transactions, plan, holdings, goals, memories }) =>
+        set({ transactions, plan, ...(holdings && { holdings }), ...(goals && { goals }), ...(memories && { memories }) }),
+      addMemory: (memory) => set((s) => ({ memories: [...s.memories, memory] })),
+      removeMemory: (id) => set((s) => ({ memories: s.memories.filter((m) => m.id !== id) })),
       removeHolding: (id) =>
         set((s) => ({
           holdings: s.holdings.filter((h) => h.id !== id),
@@ -79,7 +82,7 @@ export const useDbStore = create(
     {
       name: 'finchat-budget',
       storage: createIdbStorage(['transactions', 'plan', 'currency']),
-      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals })
+      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals, memories: s.memories })
     }
   )
 );
