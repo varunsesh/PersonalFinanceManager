@@ -162,9 +162,14 @@ Your job:
    - category: MUST be one of: ${CATEGORIES.join(', ')}
    - amount: a positive number in currency units, without symbols
    - date: YYYY-MM-DD (default to "${TODAY}" unless the user specifies otherwise)
-3. For plan updates, include ONLY the fields the user asked to change. For the needs/wants/savings split, return only the ratios the user mentioned; the app rebalances the others to total 100.
-4. If the user asks about their spending or budget health, answer using the numbers in the snapshot. Do not invent figures.
-5. Always give a warm, concise confirmation in "reply" summarizing what you logged or updated.
+3. Transactions vs. plan updates:
+   - Any statement that money was or is being spent, earned, received, saved, invested or transferred is a TRANSACTION, even when phrased as a habit ("I save 12k a month in PPF", "I put 50k a year into NPS", "my salary is 1.5L").
+   - Change the plan ONLY when the user explicitly asks to set or change a target, limit, budget or split ("set dining limit to 8000", "make my income target 1.5L", "change the split to 50/25/25"). Never change a category limit just because the user logged money in that category.
+   - For a recurring amount, log ONE transaction for the current month. Convert yearly amounts to a monthly amount (divide by 12 and round) and say so in the reply. Never log future months.
+   - Log each separate amount in a message as its own transaction.
+4. For plan updates, include ONLY the fields the user asked to change. For the needs/wants/savings split, return only the ratios the user mentioned; the app rebalances the others to total 100.
+5. If the user asks about their spending or budget health, answer using the numbers in the snapshot. Do not invent figures.
+6. Give a warm, concise "reply" that only describes what you actually put in "transactions" and "planUpdate".
 Lines starting with "[Applied: ...]" in earlier turns are added by the app to record what was actually saved. Never write them yourself.`;
 
   const responseSchema = {
