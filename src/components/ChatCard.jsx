@@ -2,6 +2,7 @@ import { useFormatMoney } from '../store/dbStore';
 import AllocationBarChart from './AllocationBarChart';
 import { AllocationBar, GainText, PortfolioHeadline } from './PortfolioSummary';
 import { formatShortINR } from '../lib/budget';
+import GoalList from './GoalList';
 
 const monthLabel = (month) =>
   new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: 'short', year: 'numeric' });
@@ -84,6 +85,19 @@ const TITLES = { summary: 'Month summary', buckets: 'Plan vs. actual', categorie
 // A snapshot of the numbers at the time of the reply, shown under it in chat.
 export default function ChatCard({ card }) {
   if (card.type === 'portfolio') return <PortfolioCard data={card.data} />;
+  if (card.type === 'goals') {
+    return (
+      <div className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex items-center justify-between pt-1 text-[11px] font-semibold text-slate-500">
+          <span>Goals</span>
+          <span className="font-medium text-slate-400">
+            Need {formatShortINR(card.data.totalRequiredMonthly)}/mo · saving {formatShortINR(card.data.totalPaceMonthly)}/mo
+          </span>
+        </div>
+        {card.data.goals.length ? <GoalList overview={card.data} /> : <div className="py-3 text-xs text-slate-400">No goals yet.</div>}
+      </div>
+    );
+  }
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="mb-2.5 flex items-center justify-between text-[11px] font-semibold text-slate-500">

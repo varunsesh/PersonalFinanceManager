@@ -15,7 +15,7 @@ function readStoredApiKey() {
   }
 }
 
-// Budget data (transactions, plan, currency, holdings) persisted to IndexedDB.
+// Budget data (transactions, plan, currency, holdings, goals) persisted to IndexedDB.
 // The API key lives in localStorage instead and is excluded from the persisted
 // state.
 export const useDbStore = create(
@@ -23,6 +23,7 @@ export const useDbStore = create(
     (set, get) => ({
       transactions: SAMPLE_TRANSACTIONS,
       holdings: [],
+      goals: [],
       priceErrors: [],
       plan: DEFAULT_PLAN,
       currency: '₹',
@@ -33,9 +34,15 @@ export const useDbStore = create(
       clearTransactions: () => set({ transactions: [] }),
       setPlan: (plan) => set({ plan }),
       // Replace transactions, plan and holdings together, so a chat reply lands as one update
-      applyBudget: ({ transactions, plan, holdings }) =>
-        set(holdings ? { transactions, plan, holdings } : { transactions, plan }),
-      removeHolding: (id) => set((s) => ({ holdings: s.holdings.filter((h) => h.id !== id) })),
+      applyBudget: ({ transactions, plan, holdings, goals }) =>
+        set({ transactions, plan, ...(holdings && { holdings }), ...(goals && { goals }) }),
+      removeHolding: (id) =>
+        set((s) => ({
+          holdings: s.holdings.filter((h) => h.id !== id),
+          // Drop links to the removed holding
+          goals: s.goals.map((g) => ({ ...g, links: (g.links ?? []).filter((l) => l.holdingId !== id) }))
+        })),
+      removeGoal: (id) => set((s) => ({ goals: s.goals.filter((g) => g.id !== id) })),
       // Fetch prices for stale holdings (or all, with force) and save them
       refreshPrices: async (force = false) => {
         const { holdings } = get();
@@ -72,7 +79,7 @@ export const useDbStore = create(
     {
       name: 'finchat-budget',
       storage: createIdbStorage(['transactions', 'plan', 'currency']),
-      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings })
+      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals })
     }
   )
 );

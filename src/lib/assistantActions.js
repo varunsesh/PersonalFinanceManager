@@ -1,6 +1,8 @@
 import { CATEGORIES } from './constants';
 import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './validation';
 import { currentValue, portfolioSummary } from './portfolio';
+import { goalsOverview } from './goals';
+import { calcSettings } from '../store/settingsStore';
 
 const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})`;
 
@@ -8,11 +10,30 @@ const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amoun
 // exactly what changed so the reply can be undone later. New ids derive from
 // result.idBase so repeated runs over the same result produce the same ids.
 //   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null,
-//               holdings: { added: [h], edited: [{ before, after }], removed: [h] } }
-export function applyAssistantResult(result, { transactions, plan, holdings = [] }, fmt) {
+//               holdings: { added, edited, removed }, goals: { added, edited, removed } }
+export function applyAssistantResult(result, { transactions, plan, holdings = [], goals = [] }, fmt) {
   const badges = [];
   const skipped = [];
-  const changes = { added: [], edited: [], deleted: [], plan: null, holdings: { added: [], edited: [], removed: [] } };
+  const changes = { added: [], edited: [], deleted: [], plan: null, holdings: emptyRecord(), goals: emptyRecord() };
+
+  // Goals first, so transactions can be tagged with goals created this turn.
+  const nextGoals = applyCollection(
+    goals,
+    { added: result.goalsAdded, edits: result.goalEdits, removeIds: result.goalRemoveIds },
+    changes.goals,
+    badges,
+    { added: (g) => `New goal: ${g.name}`, edited: (g) => `Updated goal ${g.name}`, removed: (g) => `Deleted goal ${g.name}` }
+  );
+  const goalIds = new Set(nextGoals.map((g) => g.id));
+  // Drop goal tags that point at goals that don't exist
+  const checkGoal = (t, label) => {
+    if (t.goalId && !goalIds.has(t.goalId)) {
+      skipped.push(`${label} wasn't linked to a goal (unknown goal ${t.goalId})`);
+      const { goalId, ...rest } = t;
+      return rest;
+    }
+    return t;
+  };
   let nextTransactions = transactions;
   let nextPlan = plan;
   const byId = new Map(transactions.map((t) => [t.id, t]));
@@ -44,7 +65,7 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
       skipped.push(`edit to "${before.description}" had an invalid amount or type`);
       return;
     }
-    const after = { ...normalized, id: before.id };
+    const after = checkGoal({ ...normalized, id: before.id }, `"${normalized.description}"`);
     edits.set(before.id, after);
     changes.edited.push({ before, after });
     badges.push(
@@ -66,9 +87,10 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
       skipped.push(`transaction "${raw?.description ?? 'unknown'}" had an invalid amount or type`);
       return;
     }
-    const tx = { id: `tx-${result.idBase ?? Date.now()}-${idx}`, ...t };
+    const tx = checkGoal({ id: `tx-${result.idBase ?? Date.now()}-${idx}`, ...t }, `"${t.description}"`);
     changes.added.push(tx);
-    badges.push(describe(tx, fmt));
+    const goal = tx.goalId && nextGoals.find((g) => g.id === tx.goalId);
+    badges.push(goal ? `${describe(tx, fmt)} → ${goal.name}` : describe(tx, fmt));
   });
   if (changes.added.length > 0) nextTransactions = [...changes.added, ...nextTransactions];
 
@@ -82,58 +104,90 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
     }
   }
 
-  // Holdings arrive already priced from the tools; ids are checked here again
-  // against the current state in case it changed during the request.
-  let nextHoldings = holdings;
-  const holdingIds = new Set(holdings.map((h) => h.id));
-  const removeIds = new Set((result.holdingRemoveIds ?? []).filter((id) => holdingIds.has(id)));
-  const holdingEdits = new Map(
-    (result.holdingEdits ?? []).filter((e) => holdingIds.has(e.before.id) && !removeIds.has(e.before.id)).map((e) => [e.before.id, e])
-  );
+  // Holdings arrive already priced from the tools.
   const describeHolding = (h) => {
     const v = currentValue(h);
     return v != null ? `${h.name} (${fmt(v)})` : h.name;
   };
-  if (removeIds.size || holdingEdits.size || result.holdingsAdded?.length) {
-    nextHoldings = holdings
-      .filter((h) => {
-        if (!removeIds.has(h.id)) return true;
-        changes.holdings.removed.push(h);
-        badges.push(`Removed holding ${h.name}`);
-        return false;
-      })
-      .map((h) => {
-        const e = holdingEdits.get(h.id);
-        if (!e) return h;
-        changes.holdings.edited.push(e);
-        badges.push(`Updated ${describeHolding(e.after)}`);
-        return e.after;
-      });
-    (result.holdingsAdded ?? []).forEach((h) => {
-      changes.holdings.added.push(h);
-      badges.push(`Added ${describeHolding(h)}`);
-    });
-    nextHoldings = [...nextHoldings, ...changes.holdings.added];
-  }
+  const nextHoldings = applyCollection(
+    holdings,
+    { added: result.holdingsAdded, edits: result.holdingEdits, removeIds: result.holdingRemoveIds },
+    changes.holdings,
+    badges,
+    { added: (h) => `Added ${describeHolding(h)}`, edited: (h) => `Updated ${describeHolding(h)}`, removed: (h) => `Removed holding ${h.name}` }
+  );
 
-  const holdingsChanged = changes.holdings.added.length + changes.holdings.edited.length + changes.holdings.removed.length > 0;
   const changed =
-    changes.added.length + changes.edited.length + changes.deleted.length > 0 || changes.plan !== null || holdingsChanged;
+    changes.added.length + changes.edited.length + changes.deleted.length > 0 ||
+    changes.plan !== null ||
+    recordSize(changes.holdings) > 0 ||
+    recordSize(changes.goals) > 0;
   return {
     transactions: nextTransactions,
     plan: nextPlan,
     holdings: nextHoldings,
+    goals: nextGoals,
     badges,
     skipped,
     changes: changed ? changes : null
   };
 }
 
+const emptyRecord = () => ({ added: [], edited: [], removed: [] });
+const recordSize = (r) => (r ? r.added.length + r.edited.length + r.removed.length : 0);
+
+// Apply adds/edits/removals to a list of { id } items (holdings, goals),
+// recording what changed. Ids are checked against the current list in case
+// it changed while the request was in flight.
+function applyCollection(list, { added = [], edits = [], removeIds = [] }, record, badges, label) {
+  if (!added?.length && !edits?.length && !removeIds?.length) return list;
+  const ids = new Set(list.map((x) => x.id));
+  const remove = new Set(removeIds.filter((id) => ids.has(id)));
+  const editBy = new Map(edits.filter((e) => ids.has(e.before.id) && !remove.has(e.before.id)).map((e) => [e.before.id, e]));
+  const next = list
+    .filter((x) => {
+      if (!remove.has(x.id)) return true;
+      record.removed.push(x);
+      badges.push(label.removed(x));
+      return false;
+    })
+    .map((x) => {
+      const e = editBy.get(x.id);
+      if (!e) return x;
+      record.edited.push(e);
+      badges.push(label.edited(e.after));
+      return e.after;
+    });
+  added.forEach((x) => {
+    record.added.push(x);
+    badges.push(label.added(x));
+  });
+  return [...next, ...record.added];
+}
+
+// Reverse applyCollection. Edited items are only reverted if unchanged since
+// (ignoring `volatileKeys`, e.g. prices refreshed in the background).
+function undoCollection(list, record, volatileKeys = []) {
+  if (!record) return list;
+  const strip = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !volatileKeys.includes(k)));
+  const keep = (x) => Object.fromEntries(volatileKeys.filter((k) => k in x).map((k) => [k, x[k]]));
+  const added = new Set(record.added.map((x) => x.id));
+  const edited = new Map(record.edited.map((e) => [e.after.id, e]));
+  const next = list
+    .filter((x) => !added.has(x.id))
+    .map((x) => {
+      const e = edited.get(x.id);
+      return e && same(strip(x), strip(e.after)) ? { ...e.before, ...keep(x) } : x;
+    });
+  const present = new Set(next.map((x) => x.id));
+  return [...next, ...record.removed.filter((x) => !present.has(x.id))];
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Reverse a recorded set of changes against the *current* state. Anything the
 // user has changed again since then is left alone.
-export function undoChanges(changes, { transactions, plan, holdings = [] }) {
+export function undoChanges(changes, { transactions, plan, holdings = [], goals = [] }) {
   const addedIds = new Set(changes.added.map((t) => t.id));
   const editedBefore = new Map(changes.edited.map(({ before, after }) => [after.id, { before, after }]));
 
@@ -162,28 +216,15 @@ export function undoChanges(changes, { transactions, plan, holdings = [] }) {
     });
   }
 
-  let nextHoldings = holdings;
-  if (changes.holdings) {
-    const added = new Set(changes.holdings.added.map((h) => h.id));
-    const edited = new Map(changes.holdings.edited.map(({ before, after }) => [after.id, { before, after }]));
-    nextHoldings = holdings
-      .filter((h) => !added.has(h.id))
-      .map((h) => {
-        const e = edited.get(h.id);
-        // Prices refresh in the background, so compare everything but price fields
-        return e && sameIgnoringPrice(h, e.after) ? { ...e.before, ...priceFields(h) } : h;
-      });
-    const present = new Set(nextHoldings.map((h) => h.id));
-    nextHoldings = [...nextHoldings, ...changes.holdings.removed.filter((h) => !present.has(h.id))];
-  }
-
-  return { transactions: nextTransactions, plan: nextPlan, holdings: nextHoldings };
+  return {
+    transactions: nextTransactions,
+    plan: nextPlan,
+    holdings: undoCollection(holdings, changes.holdings, PRICE_KEYS),
+    goals: undoCollection(goals, changes.goals)
+  };
 }
 
 const PRICE_KEYS = ['price', 'priceDate', 'priceFetchedAt', 'fxRate'];
-const priceFields = (h) => Object.fromEntries(PRICE_KEYS.filter((k) => k in h).map((k) => [k, h[k]]));
-const withoutPrice = (h) => Object.fromEntries(Object.entries(h).filter(([k]) => !PRICE_KEYS.includes(k)));
-const sameIgnoringPrice = (a, b) => same(withoutPrice(a), withoutPrice(b));
 
 const WARN_AT = 0.8;
 const NO_LIMIT_WARNINGS = new Set(['Savings & Investments', 'Salary & Income']);
@@ -215,10 +256,19 @@ export function budgetAlerts(before, after, plan, fmt) {
 
 // Data for an inline chat card, captured when the reply is made so the card
 // keeps showing what the reply talked about.
-export function buildCard(type, metrics, plan, { holdings = [], slabPct = 30 } = {}) {
+export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], planning } = {}) {
   if (!CARD_TYPES.includes(type) || type === 'none') return null;
+  if (type === 'goals') {
+    const overview = goalsOverview(goals, {
+      holdings,
+      transactions,
+      plan,
+      settings: { calc: calcSettings(planning), defaultReturns: planning.defaultReturns }
+    });
+    return { type, month: metrics.month, data: overview };
+  }
   if (type === 'portfolio') {
-    const p = portfolioSummary(holdings, slabPct);
+    const p = portfolioSummary(holdings, planning?.slabPct ?? 30);
     return {
       type,
       month: metrics.month,

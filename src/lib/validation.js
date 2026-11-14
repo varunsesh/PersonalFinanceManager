@@ -3,7 +3,7 @@ import { CATEGORIES, today } from './constants';
 // Validation for anything the model proposes, before it touches stored data.
 const RATIO_KEYS = ['needs', 'wants', 'savings'];
 export const TX_TYPES = ['expense', 'income', 'savings'];
-export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio'];
+export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio', 'goals'];
 
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -28,7 +28,8 @@ export function normalizeTransaction(t) {
     type: t.type,
     bucket,
     category,
-    date: isValidDate(t.date) ? t.date : today()
+    date: isValidDate(t.date) ? t.date : today(),
+    ...(typeof t.goalId === 'string' && t.goalId ? { goalId: t.goalId } : {})
   };
 }
 

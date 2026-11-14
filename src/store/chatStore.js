@@ -33,12 +33,12 @@ export const useChatStore = create(
         try {
           // Refresh stale holding prices first so answers use today's values
           await useDbStore.getState().refreshPrices().catch(() => {});
-          const { plan, transactions, holdings, currency, apiKey } = useDbStore.getState();
+          const { plan, transactions, holdings, goals, currency, apiKey } = useDbStore.getState();
           const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
-            state: { transactions, plan, holdings },
+            state: { transactions, plan, holdings, goals },
             currency,
             apiKey,
             fmt: (v) => formatMoney(v, currency),
@@ -62,7 +62,12 @@ export const useChatStore = create(
             badges: applied.badges,
             changes: applied.changes,
             alerts: budgetAlerts(before, after, applied.plan, fmt),
-            card: buildCard(result.card, after, applied.plan, { holdings: applied.holdings, slabPct: planning.slabPct }),
+            card: buildCard(result.card, after, applied.plan, {
+              holdings: applied.holdings,
+              goals: applied.goals,
+              transactions: applied.transactions,
+              planning
+            }),
             calcCards: result.calcs
           };
           set((s) => ({

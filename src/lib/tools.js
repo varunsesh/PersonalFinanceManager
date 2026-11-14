@@ -7,6 +7,7 @@ import { usdToInr } from './prices/fx';
 import { latestNav, searchFunds } from './prices/mf';
 import { searchUsSymbols } from './prices/us';
 import { createHolding, currentValue, portfolioSummary } from './portfolio';
+import { addYears, allocatedShare, goalsOverview, goalStatus } from './goals';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
@@ -27,7 +28,8 @@ const TX_FIELDS = {
   type: { type: 'STRING', enum: TX_TYPES },
   bucket: { type: 'STRING', enum: BUCKETS },
   category: { type: 'STRING', enum: CATEGORIES },
-  date: DATE
+  date: DATE,
+  goalId: { type: 'STRING', description: 'Optional: id of the goal this savings is for' }
 };
 
 export const TOOL_DECLARATIONS = [
@@ -228,9 +230,66 @@ export const TOOL_DECLARATIONS = [
     parameters: { type: 'OBJECT', properties: {} }
   },
   {
+    name: 'create_goal',
+    description:
+      'Create a financial goal. kind "emergency" sizes itself from average monthly expenses. Link holdings with link_holding_to_goal afterwards (you can do both in the same turn).',
+    parameters: {
+      type: 'OBJECT',
+      properties: { kind: { type: 'STRING', enum: ['target', 'emergency'] }, ...{
+        name: { type: 'STRING' },
+        targetAmount: { type: 'NUMBER', description: 'Rupees. Omit for an emergency fund (computed from spending)' },
+        targetDate: DATE,
+        years: { type: 'NUMBER', description: 'Alternative to targetDate' },
+        targetInTodaysMoney: { type: 'BOOLEAN', description: "True if the target is in today's money (grown by inflation)" },
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: 'Where new money for this goal goes; sets the assumed return. Omit to choose by horizon' },
+        ratePct: { type: 'NUMBER', description: 'Override the assumed annual return' },
+        priority: { type: 'INTEGER', description: '1 high, 2 medium, 3 low' },
+        emergencyMonths: { type: 'NUMBER', description: 'Emergency fund: months of expenses (default 6)' },
+        otherBalance: { type: 'NUMBER', description: 'Money for this goal kept outside tracked holdings, e.g. a savings account' }
+      } },
+      required: ['name']
+    }
+  },
+  {
+    name: 'update_goal',
+    description: 'Change a goal by id. Include only fields that change.',
+    parameters: { type: 'OBJECT', properties: { id: { type: 'STRING' }, ...{
+        name: { type: 'STRING' },
+        targetAmount: { type: 'NUMBER', description: 'Rupees. Omit for an emergency fund (computed from spending)' },
+        targetDate: DATE,
+        years: { type: 'NUMBER', description: 'Alternative to targetDate' },
+        targetInTodaysMoney: { type: 'BOOLEAN', description: "True if the target is in today's money (grown by inflation)" },
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: 'Where new money for this goal goes; sets the assumed return. Omit to choose by horizon' },
+        ratePct: { type: 'NUMBER', description: 'Override the assumed annual return' },
+        priority: { type: 'INTEGER', description: '1 high, 2 medium, 3 low' },
+        emergencyMonths: { type: 'NUMBER', description: 'Emergency fund: months of expenses (default 6)' },
+        otherBalance: { type: 'NUMBER', description: 'Money for this goal kept outside tracked holdings, e.g. a savings account' }
+      } }, required: ['id'] }
+  },
+  {
+    name: 'delete_goal',
+    description: 'Delete goals by id.',
+    parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
+  },
+  {
+    name: 'link_holding_to_goal',
+    description: 'Earmark a holding (or a share of it) for a goal. sharePct 0 unlinks. A holding\'s shares across goals cannot exceed 100%.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { goalId: { type: 'STRING' }, holdingId: { type: 'STRING' }, sharePct: { type: 'NUMBER', description: 'Default 100' } },
+      required: ['goalId', 'holdingId']
+    }
+  },
+  {
+    name: 'get_goals',
+    description:
+      'Every goal with target (inflation-adjusted if set), current balance, progress, required monthly investment (after tax), actual monthly pace and status (on_track, behind, done, building), plus totals and average monthly surplus.',
+    parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
     name: 'show_card',
     description:
-      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits) or "portfolio" (net worth and holdings).',
+      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings) or "goals" (goal progress).',
     parameters: {
       type: 'OBJECT',
       properties: { type: { type: 'STRING', enum: CARD_TYPES.filter((t) => t !== 'none') } },
@@ -340,6 +399,47 @@ function summarize(result, range) {
     ...(nps && { nps }),
     notes, taxRules: TAX_RULES.label
   };
+}
+
+const pickInstrument = (years) => (years == null || years < 3 ? 'fd' : years < 5 ? 'debt_mf' : 'equity_in');
+
+// Validated goal fields from tool args (partial for updates).
+function goalFields(args) {
+  const out = {};
+  if (args.name) out.name = String(args.name).trim();
+  if (args.kind === 'target' || args.kind === 'emergency') out.kind = args.kind;
+  if (Number(args.targetAmount) > 0) out.targetAmount = Number(args.targetAmount);
+  if (isValidDate(args.targetDate)) out.targetDate = args.targetDate;
+  else if (Number(args.years) > 0) out.targetDate = addYears(Number(args.years));
+  if (typeof args.targetInTodaysMoney === 'boolean') out.targetInTodaysMoney = args.targetInTodaysMoney;
+  if (INSTRUMENTS[args.instrument]) out.instrument = args.instrument;
+  if (Number.isFinite(args.ratePct)) out.ratePct = args.ratePct;
+  if ([1, 2, 3].includes(args.priority)) out.priority = args.priority;
+  if (Number(args.emergencyMonths) > 0) out.emergencyMonths = Number(args.emergencyMonths);
+  if (Number(args.otherBalance) >= 0 && args.otherBalance != null) out.otherBalance = Number(args.otherBalance);
+  if (out.targetDate && out.targetDate <= today()) return { error: 'targetDate must be in the future' };
+  return { fields: out };
+}
+
+const goalCtx = (state, settings) => ({
+  holdings: state.holdings ?? [],
+  transactions: state.transactions,
+  plan: state.plan,
+  settings: { calc: settings.calc, defaultReturns: settings.planning.defaultReturns }
+});
+
+// Find a goal in the staged state or among goals created earlier this turn
+// (those are edited in place so a create + link in one message works).
+function findGoal(id, state, pending) {
+  const fresh = pending.goalsAdded.find((g) => g.id === id);
+  if (fresh) return { goal: fresh, fresh: true };
+  const goal = (state.goals ?? []).find((g) => g.id === id);
+  return goal ? { goal, fresh: false } : {};
+}
+
+function stageGoalEdit(pending, before, after) {
+  pending.goalEdits = pending.goalEdits.filter((e) => e.before.id !== before.id);
+  pending.goalEdits.push({ before, after });
 }
 
 // Converts a USD amount to rupees, returning a note for the model and card.
@@ -480,6 +580,65 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
     }
     case 'get_portfolio':
       return portfolioSummary(state.holdings, settings.calc.slabPct);
+    case 'create_goal': {
+      const { fields, error } = goalFields(args);
+      if (error) return { error };
+      const kind = fields.kind ?? 'target';
+      if (kind === 'target' && !fields.targetAmount) return { error: 'targetAmount is required (ask the user)' };
+      if (kind === 'target' && !fields.targetDate) return { error: 'targetDate or years is required (ask the user)' };
+      const years = fields.targetDate ? (new Date(fields.targetDate) - new Date(today())) / 3.156e10 : null;
+      const goal = {
+        id: `goal-${pending.idBase}-${pending.goalsAdded.length}`,
+        kind,
+        priority: 2,
+        targetInTodaysMoney: false,
+        emergencyMonths: kind === 'emergency' ? 6 : undefined,
+        otherBalance: 0,
+        links: [],
+        ...fields,
+        instrument: fields.instrument ?? (kind === 'emergency' ? 'fd' : pickInstrument(years)),
+        createdAt: new Date().toISOString()
+      };
+      pending.goalsAdded.push(goal);
+      return { created: goalStatus(goal, goalCtx(state, settings)) };
+    }
+    case 'update_goal': {
+      const { goal, fresh } = findGoal(args.id, state, pending);
+      if (!goal) return { error: `No goal with id ${args.id}` };
+      const { fields, error } = goalFields(args);
+      if (error) return { error };
+      if (Object.keys(fields).length === 0) return { error: 'Nothing to change' };
+      if (fresh) Object.assign(goal, fields);
+      else stageGoalEdit(pending, goal, { ...goal, ...fields });
+      return { updated: goalStatus({ ...goal, ...fields }, goalCtx(state, settings)) };
+    }
+    case 'delete_goal': {
+      const list = Array.isArray(args.ids) ? args.ids : [];
+      const known = new Set((state.goals ?? []).map((g) => g.id));
+      pending.goalsAdded = pending.goalsAdded.filter((g) => !list.includes(g.id));
+      pending.goalRemoveIds.push(...list.filter((id) => known.has(id)));
+      return { deleted: list.length };
+    }
+    case 'link_holding_to_goal': {
+      const { goal, fresh } = findGoal(args.goalId, state, pending);
+      if (!goal) return { error: `No goal with id ${args.goalId}` };
+      const holding = (state.holdings ?? []).find((h) => h.id === args.holdingId);
+      if (!holding) return { error: `No holding with id ${args.holdingId}` };
+      const sharePct = args.sharePct == null ? 100 : Number(args.sharePct);
+      if (!(sharePct >= 0 && sharePct <= 100)) return { error: 'sharePct must be 0-100' };
+      const allGoals = [...(state.goals ?? []), ...pending.goalsAdded];
+      const used = allocatedShare(allGoals, holding.id, goal.id);
+      if (used + sharePct > 100) {
+        return { error: `${holding.name} already has ${used}% earmarked for other goals; at most ${100 - used}% is free` };
+      }
+      const links = (goal.links ?? []).filter((l) => l.holdingId !== holding.id);
+      if (sharePct > 0) links.push({ holdingId: holding.id, sharePct });
+      if (fresh) goal.links = links;
+      else stageGoalEdit(pending, goal, { ...goal, links });
+      return { linked: { goal: goal.name, holding: holding.name, sharePct }, status: goalStatus({ ...goal, links }, goalCtx(state, settings)) };
+    }
+    case 'get_goals':
+      return goalsOverview([...(state.goals ?? [])], goalCtx(state, settings));
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
       pending.card = args.type;
