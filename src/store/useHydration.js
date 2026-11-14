@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useChatStore } from './chatStore';
 import { useDbStore } from './dbStore';
+import { useSettingsStore } from './settingsStore';
 
-const STORES = [useDbStore, useChatStore];
+const STORES = [useDbStore, useChatStore, useSettingsStore];
 const allHydrated = () => STORES.every((store) => store.persist.hasHydrated());
 
 // True once every persisted store has loaded from IndexedDB. The UI waits for

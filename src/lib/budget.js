@@ -62,3 +62,15 @@ export function computeMetrics(transactions, plan, month = currentMonth()) {
     categoryBreakdown
   };
 }
+
+// Compact Indian-style amounts for headlines: ₹45K, ₹21.2L, ₹1.4Cr.
+export function formatShortINR(val) {
+  const n = Number(val) || 0;
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  const trim = (x) => x.toFixed(x >= 100 ? 0 : 1).replace(/\.0$/, '');
+  if (abs >= 1e7) return `${sign}₹${trim(abs / 1e7)}Cr`;
+  if (abs >= 1e5) return `${sign}₹${trim(abs / 1e5)}L`;
+  if (abs >= 1e3) return `${sign}₹${trim(abs / 1e3)}K`;
+  return `${sign}₹${Math.round(abs)}`;
+}

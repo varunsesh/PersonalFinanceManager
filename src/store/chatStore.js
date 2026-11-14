@@ -6,6 +6,7 @@ import { applyAssistantResult, budgetAlerts, buildCard, undoChanges } from '../l
 import { runAssistant, toGeminiHistory } from '../lib/gemini';
 import { createIdbStorage } from './idbStorage';
 import { useDbStore } from './dbStore';
+import { calcSettings, useSettingsStore } from './settingsStore';
 
 // Chat messages (persisted) plus transient send state. sendMessage writes any
 // parsed changes straight into dbStore, so every view subscribed to dbStore
@@ -31,13 +32,15 @@ export const useChatStore = create(
         set((s) => ({ messages: [...s.messages, userMsg], isSending: true }));
 
         try {
+          const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
             state: { transactions, plan },
             currency,
             apiKey,
-            fmt: (v) => formatMoney(v, currency)
+            fmt: (v) => formatMoney(v, currency),
+            settings: { planning, calc: calcSettings(planning) }
           });
 
           // Re-read: the budget may have changed while the request was in flight.
@@ -57,7 +60,8 @@ export const useChatStore = create(
             badges: applied.badges,
             changes: applied.changes,
             alerts: budgetAlerts(before, after, applied.plan, fmt),
-            card: buildCard(result.card, after, applied.plan)
+            card: buildCard(result.card, after, applied.plan),
+            calcCards: result.calcs
           };
           set((s) => ({
             messages: [...s.messages, aiMsg],

@@ -1,5 +1,6 @@
 import { AlertTriangle, Bot, CheckCircle2, RotateCcw, User } from 'lucide-react';
 import ChatCard from './ChatCard';
+import ReturnsCard from './ReturnsCard';
 
 export default function ChatMessage({ message: m, onBadgeClick, onUndo }) {
   const canUndo = Boolean(m.changes) && !m.undone;
@@ -13,7 +14,11 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo }) {
       >
         {m.role === 'user' ? <User className="w-3.5 h-3.5" /> : <Bot className="w-4 h-4" />}
       </div>
-      <div className={`max-w-[84%] space-y-1.5 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+      <div
+        className={`max-w-[84%] space-y-1.5 ${m.role === 'user' ? 'items-end' : 'items-start'} ${
+          m.card || m.calcCards?.length ? 'w-full' : ''
+        }`}
+      >
         <div
           className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
             m.role === 'user'
@@ -25,6 +30,9 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo }) {
         </div>
 
         {m.card && <ChatCard card={m.card} />}
+        {m.calcCards?.map((calc, i) => (
+          <ReturnsCard key={i} calc={calc} />
+        ))}
 
         {m.badges && m.badges.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">

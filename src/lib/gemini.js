@@ -49,7 +49,8 @@ Rules:
 3. Corrections: for "that was 450 not 480", "delete the uber one" and similar, call edit_transactions or delete_transactions with the id. If the transaction isn't in the recent list, call find_transactions first. If it's still ambiguous, ask instead of guessing.
 4. Questions: for anything beyond this month's status above (other months, date ranges, trends, specific merchants), call get_spending_summary, find_transactions or get_budget_status. Never estimate or invent numbers.
 5. Call show_card when a visual helps: "summary", "buckets" or "categories" (current month only).
-6. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
+6. Investments: for any projection, maturity value, "how much will X become" or "how much should I invest" question, call calculate_returns or required_investment. Never do the maths yourself. Use the user's stated return if given; otherwise omit it to use their saved default. Pick the instrument carefully (Indian stocks and IPOs are equity_in; US stocks, ETFs and IPOs held directly are us_stock; US/international funds bought through an Indian fund house are intl_fund). In the reply, give the after-tax amount in hand and the main tax line, mention that market returns are assumptions, and leave the full breakdown to the card. These are projections and suggestions; the user decides.
+7. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
 Lines starting with "[Applied: ...]" or "[Undone by user: ...]" in earlier turns are added by the app to record what is actually saved. Never write them yourself.`;
 }
 
@@ -77,12 +78,12 @@ async function generate(apiKey, body) {
 // tools are validated and collected into `pending`, which the caller applies
 // (and can later undo) in one step.
 // Returns { reply, idBase, transactions, transactionEdits, deleteTransactionIds, planUpdate, card, toolCalls }.
-export async function runAssistant({ userMessage, history, state, currency, apiKey, fmt }) {
+export async function runAssistant({ userMessage, history, state, currency, apiKey, fmt, settings }) {
   if (!apiKey) {
     throw new Error('NO_API_KEY');
   }
 
-  const pending = { idBase: Date.now(), transactions: [], transactionEdits: [], deleteTransactionIds: [], planUpdate: null, card: null };
+  const pending = { idBase: Date.now(), transactions: [], transactionEdits: [], deleteTransactionIds: [], planUpdate: null, card: null, calcs: [] };
   const toolCalls = [];
   const contents = [...history, { role: 'user', parts: [{ text: userMessage }] }];
   const request = {
@@ -108,11 +109,17 @@ export async function runAssistant({ userMessage, history, state, currency, apiK
     // answer every call in the same order.
     contents.push(content);
     const staged = applyAssistantResult(pending, state, fmt);
-    const responses = calls.map((call) => {
-      const response = executeTool(call.name, call.args ?? {}, staged, pending, fmt);
+    const responses = [];
+    for (const call of calls) {
+      let response;
+      try {
+        response = await executeTool(call.name, call.args ?? {}, staged, pending, fmt, settings);
+      } catch (err) {
+        response = { error: err.message };
+      }
       toolCalls.push(call.name);
-      return { functionResponse: { name: call.name, response } };
-    });
+      responses.push({ functionResponse: { name: call.name, response } });
+    }
     contents.push({ role: 'user', parts: responses });
   }
 

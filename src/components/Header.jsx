@@ -1,4 +1,4 @@
-import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Wallet } from 'lucide-react';
+import { Database, Download, KeyRound, LayoutDashboard, MessageSquare, Plus, Settings, Wallet } from 'lucide-react';
 import { today } from '../lib/constants';
 import { useChatStore } from '../store/chatStore';
 import { useDbStore } from '../store/dbStore';
@@ -20,7 +20,7 @@ function exportJSON() {
   URL.revokeObjectURL(url);
 }
 
-export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpenManualEntry }) {
+export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpenManualEntry, onOpenSettings }) {
   const apiKey = useDbStore((s) => s.apiKey);
   const currency = useDbStore((s) => s.currency);
   const setCurrency = useDbStore((s) => s.setCurrency);
@@ -76,6 +76,15 @@ export default function Header({ activeView, onChangeView, onOpenKeyModal, onOpe
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Add</span>
+            </button>
+
+            <button
+              onClick={onOpenSettings}
+              className="inline-flex items-center text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 p-1.5 rounded-lg transition-colors"
+              title="Planning settings"
+              aria-label="Planning settings"
+            >
+              <Settings className="w-3.5 h-3.5" />
             </button>
 
             <button

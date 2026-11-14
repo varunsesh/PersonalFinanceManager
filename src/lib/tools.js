@@ -1,11 +1,21 @@
 import { CATEGORIES, today } from './constants';
 import { computeMetrics } from './budget';
 import { CARD_TYPES, TX_TYPES, applyPlanUpdate, isValidDate, normalizeTransaction } from './validation';
+import { project, projectRange, requiredContribution } from './finance/calculators';
+import { INSTRUMENTS, TAX_RULES } from './finance/taxRules';
+import { usdToInr } from './prices/fx';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
 // tools are validated here and collected; the app applies them after the turn.
 const BUCKETS = ['needs', 'wants', 'savings', 'income'];
+const CALC_MODES = ['lumpsum', 'monthly', 'yearly'];
+const INSTRUMENT_HELP =
+  'fd: fixed/recurring deposit. ppf. nps. ' +
+  'equity_in: Indian stocks, Indian IPOs and Indian equity mutual funds (flexi/large/mid/small cap, ELSS, Indian index funds), including ones like Parag Parikh Flexi Cap that hold some foreign stocks but are mostly Indian equity. ' +
+  'intl_fund: funds from Indian fund houses that invest mainly abroad (US/Nasdaq/S&P 500/global fund-of-funds). ' +
+  'us_stock: US stocks, ETFs and IPOs held directly through a US broker. ' +
+  'debt_mf: debt and liquid funds.';
 const DATE = { type: 'STRING', description: 'YYYY-MM-DD' };
 
 const TX_FIELDS = {
@@ -120,6 +130,42 @@ export const TOOL_DECLARATIONS = [
     }
   },
   {
+    name: 'calculate_returns',
+    description:
+      'Project what an investment grows to, after Indian tax, with a tax breakdown. Use for any "what will X become" question. Never compute returns yourself. A card with the breakdown and sliders is shown automatically.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: INSTRUMENT_HELP },
+        mode: { type: 'STRING', enum: CALC_MODES, description: 'lumpsum (one-time), monthly (SIP/RD) or yearly contributions' },
+        amount: { type: 'NUMBER', description: 'Amount per contribution, in amountCurrency' },
+        amountCurrency: { type: 'STRING', enum: ['INR', 'USD'], description: 'Currency of amount; USD is converted at today\'s rate. Default INR' },
+        years: { type: 'NUMBER' },
+        annualReturnPct: { type: 'NUMBER', description: "Omit to use the user's default for this instrument" },
+        stepUpPct: { type: 'NUMBER', description: 'Yearly increase in monthly/yearly contributions' }
+      },
+      required: ['instrument', 'mode', 'amount', 'years']
+    }
+  },
+  {
+    name: 'required_investment',
+    description:
+      'How much to invest (lumpsum, monthly or yearly) to have a target amount in hand after tax. A card is shown automatically.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: INSTRUMENT_HELP },
+        mode: { type: 'STRING', enum: CALC_MODES },
+        targetAmount: { type: 'NUMBER', description: 'Rupees wanted in hand after tax' },
+        years: { type: 'NUMBER' },
+        annualReturnPct: { type: 'NUMBER', description: "Omit to use the user's default for this instrument" },
+        stepUpPct: { type: 'NUMBER' },
+        targetInTodaysMoney: { type: 'BOOLEAN', description: "True if the target is in today's money and should be grown by inflation" }
+      },
+      required: ['instrument', 'mode', 'targetAmount', 'years']
+    }
+  },
+  {
     name: 'show_card',
     description:
       'Show a visual card under your reply for the current month: "summary" (income/spent/saved), "buckets" (needs/wants/savings vs. plan) or "categories" (category spending vs. limits).',
@@ -211,10 +257,40 @@ export function budgetStatus({ transactions, plan }, month) {
   };
 }
 
+function calcParams(args, settings) {
+  if (!INSTRUMENTS[args.instrument]) return { error: `Unknown instrument ${args.instrument}` };
+  if (!CALC_MODES.includes(args.mode)) return { error: `mode must be one of ${CALC_MODES.join(', ')}` };
+  const years = Number(args.years);
+  if (!(years >= 0.25 && years <= 60)) return { error: 'years must be between 0.25 and 60' };
+  const ratePct = Number.isFinite(args.annualReturnPct) ? args.annualReturnPct : settings.defaultReturns[args.instrument];
+  return {
+    params: { instrument: args.instrument, mode: args.mode, years, ratePct, stepUpPct: Number(args.stepUpPct) || 0 }
+  };
+}
+
+// What the model needs to describe a projection; the card shows the rest.
+function summarize(result, range) {
+  const { instrumentLabel, mode, amount, years, ratePct, invested, grossValue, tax, taxLines, inHand, postTaxReturnPct, todaysMoney, notes, nps } = result;
+  return {
+    instrument: instrumentLabel, mode, amount, years, assumedReturnPct: ratePct,
+    invested, grossValue, tax, taxBreakdown: taxLines, inHand, postTaxReturnPct, inTodaysMoney: todaysMoney,
+    ...(range && { atLowerAndHigherReturn: range }),
+    ...(nps && { nps }),
+    notes, taxRules: TAX_RULES.label
+  };
+}
+
+// Converts a USD amount to rupees, returning a note for the model and card.
+async function toInr(amount, currency) {
+  if (currency !== 'USD') return { amount };
+  const { rate, date } = await usdToInr();
+  return { amount: Math.round(amount * rate), fx: { usd: amount, rate, date } };
+}
+
 // Runs one function call. `state` is the budget including changes staged
 // earlier in this turn; `pending` accumulates the actions to apply afterwards.
-// Returns the response object sent back to the model.
-export function executeTool(name, args = {}, state, pending, fmt) {
+// Returns (a promise of) the response object sent back to the model.
+export async function executeTool(name, args = {}, state, pending, fmt, settings) {
   const ids = new Set(state.transactions.map((t) => t.id));
   switch (name) {
     case 'get_spending_summary':
@@ -250,6 +326,34 @@ export function executeTool(name, args = {}, state, pending, fmt) {
         categoryLimitUpdates: [...(prev.categoryLimitUpdates ?? []), ...(args.categoryLimitUpdates ?? [])]
       };
       return { applied, rejected: skipped };
+    }
+    case 'calculate_returns': {
+      const { params, error } = calcParams(args, settings.planning);
+      if (error) return { error };
+      if (!(Number(args.amount) > 0)) return { error: 'amount must be positive' };
+      const { amount, fx } = await toInr(Number(args.amount), args.amountCurrency);
+      params.amount = amount;
+      const result = project(params, settings.calc);
+      const range = projectRange(params, settings.calc);
+      pending.calcs.push({ kind: 'returns', params, settings: settings.calc, fx });
+      return {
+        ...(fx && { converted: `$${fx.usd} at ₹${fx.rate}/USD (${fx.date}) = ₹${amount}` }),
+        ...summarize(result, range)
+      };
+    }
+    case 'required_investment': {
+      const { params, error } = calcParams(args, settings.planning);
+      if (error) return { error };
+      let target = Number(args.targetAmount);
+      if (!(target > 0)) return { error: 'targetAmount must be positive' };
+      if (args.targetInTodaysMoney) target = Math.round(target * (1 + settings.calc.inflationPct / 100) ** params.years);
+      const amount = requiredContribution(params, target, settings.calc);
+      if (amount == null) {
+        return { error: `No ${params.mode} amount in ${INSTRUMENTS[params.instrument].label} reaches this target (e.g. PPF is capped at ₹1.5L a year)` };
+      }
+      params.amount = amount;
+      pending.calcs.push({ kind: 'required', params, target, settings: settings.calc });
+      return { requiredAmount: amount, perContribution: params.mode, targetInHand: target, ...summarize(project(params, settings.calc)) };
     }
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
