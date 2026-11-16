@@ -74,3 +74,45 @@ export function formatShortINR(val) {
   if (abs >= 1e3) return `${sign}₹${trim(abs / 1e3)}K`;
   return `${sign}₹${Math.round(abs)}`;
 }
+
+// The month before `month` (YYYY-MM).
+export function previousMonth(month) {
+  const [y, m] = month.split('-').map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
+// Spending budget for the current month: income (or the income target until
+// salary is logged) × needs+wants share, minus expenses so far, spread over
+// the days left.
+export function monthSnapshot(transactions, plan, isoToday) {
+  const month = isoToday.slice(0, 7);
+  let income = 0;
+  let spent = 0;
+  let saved = 0;
+  transactions.forEach((t) => {
+    if (!t.date.startsWith(month)) return;
+    if (t.type === 'income') income += t.amount;
+    else if (t.type === 'expense') spent += t.amount;
+    else saved += t.amount;
+  });
+  const usingTarget = income <= 0;
+  const base = usingTarget ? plan.monthlyIncomeTarget : income;
+  const budget = (base * (plan.ratios.needs + plan.ratios.wants)) / 100;
+  const [y, m, d] = isoToday.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const daysLeft = daysInMonth - d + 1;
+  const left = budget - spent;
+  return {
+    month,
+    income,
+    usingTarget,
+    budget: Math.round(budget),
+    spent: Math.round(spent),
+    saved: Math.round(saved),
+    left: Math.round(left),
+    perDay: Math.max(0, Math.round(left / daysLeft)),
+    daysLeft,
+    elapsedPct: Math.round(((d - 1) / daysInMonth) * 100),
+    spentPct: budget > 0 ? Math.round((spent / budget) * 100) : 0
+  };
+}

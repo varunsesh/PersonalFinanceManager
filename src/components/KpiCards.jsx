@@ -1,8 +1,11 @@
 import { PiggyBank, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
-import { useBudgetMetrics, useDbStore, useFormatMoney } from '../store/dbStore';
+import { useBudgetMetrics, useDbStore, useFormatMoney, usePreviousMonthMetrics } from '../store/dbStore';
+import Delta, { shortMonth } from './Delta';
 
 export default function KpiCards() {
   const metrics = useBudgetMetrics();
+  const prev = usePreviousMonthMetrics();
+  const prevLabel = shortMonth(prev.month);
   const plan = useDbStore((s) => s.plan);
   const formatMoney = useFormatMoney();
 
@@ -15,6 +18,7 @@ export default function KpiCards() {
         </div>
         <div className="text-lg font-bold text-slate-900">{formatMoney(metrics.totalIncome)}</div>
         <div className="text-[11px] text-slate-400 mt-0.5">Target: {formatMoney(plan.monthlyIncomeTarget)}</div>
+        <Delta now={metrics.totalIncome} prev={prev.totalIncome} prevLabel={prevLabel} goodWhenUp className="text-[10px] font-medium" />
       </div>
 
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm">
@@ -24,6 +28,7 @@ export default function KpiCards() {
         </div>
         <div className="text-lg font-bold text-slate-900">{formatMoney(metrics.totalExpenses)}</div>
         <div className="text-[11px] text-slate-400 mt-0.5">Needs + Wants</div>
+        <Delta now={metrics.totalExpenses} prev={prev.totalExpenses} prevLabel={prevLabel} className="text-[10px] font-medium" />
       </div>
 
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm">
@@ -37,6 +42,7 @@ export default function KpiCards() {
             ? `${Math.round((metrics.totalSavings / metrics.totalIncome) * 100)}% savings rate`
             : `Goal: ${plan.ratios.savings}%`}
         </div>
+        <Delta now={metrics.totalSavings} prev={prev.totalSavings} prevLabel={prevLabel} goodWhenUp className="text-[10px] font-medium" />
       </div>
 
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm">

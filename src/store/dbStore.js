@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { API_KEY_STORAGE, DEFAULT_PLAN, SAMPLE_TRANSACTIONS, currentMonth } from '../lib/constants';
-import { computeMetrics, formatMoney } from '../lib/budget';
+import { API_KEY_STORAGE, DEFAULT_PLAN, SAMPLE_TRANSACTIONS, currentMonth, today } from '../lib/constants';
+import { computeMetrics, formatMoney, monthSnapshot, previousMonth } from '../lib/budget';
 import { createIdbStorage } from './idbStorage';
 import { refreshPrices } from '../lib/portfolio';
 import { useSettingsStore } from './settingsStore';
@@ -107,6 +107,21 @@ export function useBudgetMetrics() {
   const plan = useDbStore((s) => s.plan);
   const month = currentMonth();
   return useMemo(() => computeMetrics(transactions, plan, month), [transactions, plan, month]);
+}
+
+// Same metrics for the previous month, for "vs last month" comparisons.
+export function usePreviousMonthMetrics() {
+  const transactions = useDbStore((s) => s.transactions);
+  const plan = useDbStore((s) => s.plan);
+  const month = previousMonth(currentMonth());
+  return useMemo(() => computeMetrics(transactions, plan, month), [transactions, plan, month]);
+}
+
+export function useMonthSnapshot() {
+  const transactions = useDbStore((s) => s.transactions);
+  const plan = useDbStore((s) => s.plan);
+  const date = today();
+  return useMemo(() => monthSnapshot(transactions, plan, date), [transactions, plan, date]);
 }
 
 export function useFormatMoney() {

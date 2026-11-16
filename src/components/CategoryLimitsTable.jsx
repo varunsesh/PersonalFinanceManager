@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Check, Edit3, X } from 'lucide-react';
 import { CATEGORIES } from '../lib/constants';
-import { useBudgetMetrics, useDbStore, useFormatMoney } from '../store/dbStore';
+import { useBudgetMetrics, useDbStore, useFormatMoney, usePreviousMonthMetrics } from '../store/dbStore';
+import Delta, { shortMonth } from './Delta';
 
 export default function CategoryLimitsTable() {
   const metrics = useBudgetMetrics();
+  const prev = usePreviousMonthMetrics();
   const plan = useDbStore((s) => s.plan);
   const setCategoryLimit = useDbStore((s) => s.setCategoryLimit);
   const formatMoney = useFormatMoney();
@@ -40,6 +42,15 @@ export default function CategoryLimitsTable() {
                 <td className="py-2.5 px-4 font-medium text-slate-800">{cat}</td>
                 <td className="py-2.5 px-4 text-right font-semibold text-slate-800">
                   {formatMoney(spent)}
+                  <div>
+                    <Delta
+                      now={spent}
+                      prev={prev.byCategory[cat] || 0}
+                      prevLabel={shortMonth(prev.month)}
+                      goodWhenUp={cat === 'Savings & Investments'}
+                      className="text-[10px] font-medium"
+                    />
+                  </div>
                 </td>
                 <td className="py-2.5 px-4 text-right">
                   {editingCat === cat ? (
