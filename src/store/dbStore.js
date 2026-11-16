@@ -7,11 +7,13 @@ import { createIdbStorage } from './idbStorage';
 import { refreshPrices } from '../lib/portfolio';
 import { useSettingsStore } from './settingsStore';
 
+// The key is entered in the app and kept in this device's storage. It is
+// deliberately not read from .env, so it is never compiled into a build.
 function readStoredApiKey() {
   try {
-    return localStorage.getItem(API_KEY_STORAGE) || import.meta.env.VITE_GEMINI_API_KEY || '';
+    return localStorage.getItem(API_KEY_STORAGE) || '';
   } catch {
-    return import.meta.env.VITE_GEMINI_API_KEY || '';
+    return '';
   }
 }
 
