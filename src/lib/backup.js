@@ -25,6 +25,7 @@ export function buildBackup() {
       holdings: db.holdings,
       goals: db.goals ?? [],
       memories: db.memories ?? [],
+      suggestionState: db.suggestionState,
       messages: useChatStore.getState().messages,
       settings
     }
@@ -96,6 +97,7 @@ export function restoreBackup(backup) {
     holdings: d.holdings ?? [],
     goals: d.goals ?? [],
     memories: d.memories ?? [],
+    suggestionState: d.suggestionState ?? { dismissed: {}, accepted: {} },
     priceErrors: []
   });
   useChatStore.setState({ messages: d.messages ?? [], hasNewUpdates: true });

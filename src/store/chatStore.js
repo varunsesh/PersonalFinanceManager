@@ -4,6 +4,7 @@ import { INITIAL_MESSAGES, nowTime } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
 import { applyAssistantResult, budgetAlerts, buildCard, undoChanges } from '../lib/assistantActions';
 import { runAssistant, toGeminiHistory } from '../lib/gemini';
+import { suggestionToResult } from '../lib/suggestions';
 import { createIdbStorage } from './idbStorage';
 import { useDbStore } from './dbStore';
 import { calcSettings, useSettingsStore } from './settingsStore';
@@ -33,12 +34,12 @@ export const useChatStore = create(
         try {
           // Refresh stale holding prices first so answers use today's values
           await useDbStore.getState().refreshPrices().catch(() => {});
-          const { plan, transactions, holdings, goals, memories, currency, apiKey } = useDbStore.getState();
+          const { plan, transactions, holdings, goals, memories, suggestionState, currency, apiKey } = useDbStore.getState();
           const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
-            state: { transactions, plan, holdings, goals, memories },
+            state: { transactions, plan, holdings, goals, memories, suggestionState },
             currency,
             apiKey,
             fmt: (v) => formatMoney(v, currency),
@@ -88,11 +89,38 @@ export const useChatStore = create(
         }
       },
 
+      // Apply an accepted suggestion (with the user's adjustments) and record it
+      // as an assistant message so it shows badges and can be undone.
+      acceptSuggestion: (suggestion, proposal) => {
+        const db = useDbStore.getState();
+        const result = suggestionToResult(suggestion, proposal, db);
+        db.setSuggestionOutcome(suggestion.id, 'accepted');
+        if (!result) return;
+        const fmt = (v) => formatMoney(v, db.currency);
+        const applied = applyAssistantResult(result, db, fmt);
+        if (!applied.changes) return;
+        const before = computeMetrics(db.transactions, db.plan);
+        db.applyBudget(applied);
+        const msg = {
+          id: `msg-${Date.now()}`,
+          role: 'assistant',
+          timestamp: nowTime(),
+          text: `Done: ${suggestion.title}.`,
+          badges: applied.badges,
+          changes: applied.changes,
+          alerts: budgetAlerts(before, computeMetrics(applied.transactions, applied.plan), applied.plan, fmt),
+          suggestionId: suggestion.id
+        };
+        set((s) => ({ messages: [...s.messages, msg], hasNewUpdates: true }));
+      },
+
       undoMessage: (id) => {
         const msg = get().messages.find((m) => m.id === id);
         if (!msg?.changes || msg.undone) return;
         const db = useDbStore.getState();
         db.applyBudget(undoChanges(msg.changes, db));
+        // Undoing an accepted suggestion offers it again
+        if (msg.suggestionId) db.setSuggestionOutcome(msg.suggestionId, null);
         set((s) => ({
           messages: s.messages.map((m) => (m.id === id ? { ...m, undone: true } : m)),
           hasNewUpdates: true

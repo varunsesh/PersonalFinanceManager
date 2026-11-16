@@ -9,6 +9,7 @@ import { searchUsSymbols } from './prices/us';
 import { createHolding, currentValue, portfolioSummary } from './portfolio';
 import { addYears, allocatedShare, goalsOverview, goalStatus } from './goals';
 import { MAX_MEMORIES, MEMORY_TOPICS, validateMemory } from './memory';
+import { buildSuggestions } from './suggestions';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
@@ -312,9 +313,15 @@ export const TOOL_DECLARATIONS = [
     parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
   },
   {
+    name: 'get_suggestions',
+    description:
+      "The app's current suggestions for the user (surplus split across goals, emergency fund, FD maturities, tax-free gain harvesting, goals at risk). The user accepts, adjusts or dismisses them in a card; you never apply them yourself.",
+    parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
     name: 'show_card',
     description:
-      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings) or "goals" (goal progress).',
+      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings), "goals" (goal progress) or "suggestions" (live suggestions with Accept/Adjust/Dismiss buttons).',
     parameters: {
       type: 'OBJECT',
       properties: { type: { type: 'STRING', enum: CARD_TYPES.filter((t) => t !== 'none') } },
@@ -661,6 +668,10 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
       if (fresh) goal.links = links;
       else stageGoalEdit(pending, goal, { ...goal, links });
       return { linked: { goal: goal.name, holding: holding.name, sharePct }, status: goalStatus({ ...goal, links }, goalCtx(state, settings)) };
+    }
+    case 'get_suggestions': {
+      const list = buildSuggestions({ ...goalCtx(state, settings), goals: state.goals ?? [], suggestionState: state.suggestionState });
+      return { suggestions: list.map(({ id, kind, title, reason, proposal }) => ({ id, kind, title, reason, proposal })) };
     }
     case 'get_goals':
       return goalsOverview([...(state.goals ?? [])], goalCtx(state, settings));

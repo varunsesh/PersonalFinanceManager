@@ -3,7 +3,7 @@ import { CATEGORIES, today } from './constants';
 // Validation for anything the model proposes, before it touches stored data.
 const RATIO_KEYS = ['needs', 'wants', 'savings'];
 export const TX_TYPES = ['expense', 'income', 'savings'];
-export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio', 'goals'];
+export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio', 'goals', 'suggestions'];
 
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 

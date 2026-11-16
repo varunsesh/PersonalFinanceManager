@@ -279,6 +279,8 @@ export function budgetAlerts(before, after, plan, fmt) {
 // keeps showing what the reply talked about.
 export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], planning } = {}) {
   if (!CARD_TYPES.includes(type) || type === 'none') return null;
+  // Suggestions are rendered live (they change as the user accepts or dismisses them)
+  if (type === 'suggestions') return { type, month: metrics.month };
   if (type === 'goals') {
     const overview = goalsOverview(goals, {
       holdings,

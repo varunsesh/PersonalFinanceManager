@@ -27,6 +27,8 @@ export const useDbStore = create(
       holdings: [],
       goals: [],
       memories: [],
+      // { dismissed: { [suggestionId]: isoDate }, accepted: { ... } }
+      suggestionState: { dismissed: {}, accepted: {} },
       priceErrors: [],
       plan: DEFAULT_PLAN,
       currency: '₹',
@@ -48,6 +50,17 @@ export const useDbStore = create(
           goals: s.goals.map((g) => ({ ...g, links: (g.links ?? []).filter((l) => l.holdingId !== id) }))
         })),
       removeGoal: (id) => set((s) => ({ goals: s.goals.filter((g) => g.id !== id) })),
+      // outcome: 'dismissed' | 'accepted' | null (reopen)
+      setSuggestionOutcome: (id, outcome) =>
+        set((s) => {
+          const dismissed = { ...s.suggestionState.dismissed };
+          const accepted = { ...s.suggestionState.accepted };
+          delete dismissed[id];
+          delete accepted[id];
+          if (outcome === 'dismissed') dismissed[id] = new Date().toISOString();
+          if (outcome === 'accepted') accepted[id] = new Date().toISOString();
+          return { suggestionState: { dismissed, accepted } };
+        }),
       // Fetch prices for stale holdings (or all, with force) and save them
       refreshPrices: async (force = false) => {
         const { holdings } = get();
@@ -84,7 +97,7 @@ export const useDbStore = create(
     {
       name: 'finchat-budget',
       storage: createIdbStorage(['transactions', 'plan', 'currency']),
-      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals, memories: s.memories })
+      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals, memories: s.memories, suggestionState: s.suggestionState })
     }
   )
 );

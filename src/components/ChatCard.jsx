@@ -3,6 +3,8 @@ import AllocationBarChart from './AllocationBarChart';
 import { AllocationBar, GainText, PortfolioHeadline } from './PortfolioSummary';
 import { formatShortINR } from '../lib/budget';
 import GoalList from './GoalList';
+import SuggestionCard from './SuggestionCard';
+import { useSuggestions } from '../store/useSuggestions';
 
 const monthLabel = (month) =>
   new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: 'short', year: 'numeric' });
@@ -82,8 +84,24 @@ function PortfolioCard({ data }) {
 
 const TITLES = { summary: 'Month summary', buckets: 'Plan vs. actual', categories: 'Top categories' };
 
-// A snapshot of the numbers at the time of the reply, shown under it in chat.
-export default function ChatCard({ card }) {
+function LiveSuggestions({ onAsk }) {
+  const suggestions = useSuggestions();
+  if (suggestions.length === 0) {
+    return <div className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-400">No open suggestions right now.</div>;
+  }
+  return (
+    <div className="w-full space-y-2">
+      {suggestions.map((s) => (
+        <SuggestionCard key={s.id} suggestion={s} onAsk={onAsk} />
+      ))}
+    </div>
+  );
+}
+
+// A snapshot of the numbers at the time of the reply, shown under it in chat
+// (except suggestions, which stay live).
+export default function ChatCard({ card, onAsk }) {
+  if (card.type === 'suggestions') return <LiveSuggestions onAsk={onAsk} />;
   if (card.type === 'portfolio') return <PortfolioCard data={card.data} />;
   if (card.type === 'goals') {
     return (

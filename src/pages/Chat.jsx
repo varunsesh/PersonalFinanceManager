@@ -39,7 +39,7 @@ export default function Chat({ onOpenDashboard, onRequireApiKey }) {
 
       <div ref={feedRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((m) => (
-          <ChatMessage key={m.id} message={m} onBadgeClick={onOpenDashboard} onUndo={undoMessage} />
+          <ChatMessage key={m.id} message={m} onBadgeClick={onOpenDashboard} onUndo={undoMessage} onAsk={send} />
         ))}
         {isSending && <TypingIndicator />}
       </div>
