@@ -1,5 +1,6 @@
 import { AlertTriangle, Bot, CheckCircle2, RotateCcw, User } from 'lucide-react';
 import ChatCard from './ChatCard';
+import LoanCard from './LoanCard';
 import ReturnsCard from './ReturnsCard';
 
 export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk }) {
@@ -31,7 +32,7 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk })
 
         {m.card && <ChatCard card={m.card} onAsk={onAsk} />}
         {m.calcCards?.map((calc, i) => (
-          <ReturnsCard key={i} calc={calc} />
+          calc.kind === 'loan' ? <LoanCard key={i} calc={calc} /> : <ReturnsCard key={i} calc={calc} />
         ))}
 
         {m.badges && m.badges.length > 0 && (

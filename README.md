@@ -18,6 +18,7 @@ Built with React, Vite, Tailwind CSS and zustand, and packaged as an Android app
 
 **Planning**
 - **After-tax projections:** "2L in an FD at 7.25% for 3 years", "15k SIP in Parag Parikh for 10 years", "$5,000 in VOO for 8 years", "10k/month in NPS till 60". Cards show the tax breakdown, post-tax return, value in today's money, a range at ±2%, and sliders for return and years.
+- **Loans and EMIs:** "EMI on a 50L home loan at 8.5% for 20 years", "how much can I borrow with a 40k EMI?", "how long to repay 8L at 15k a month?". Give any three of amount, rate, tenure and EMI and the fourth is worked out, with total interest, a principal/interest bar, a year-by-year table and sliders.
 - **Required investment:** "how much monthly to have ₹50L in today's money in 12 years?"
 - **Investments you own:** mutual funds (Indian and international), US stocks/ETFs, FDs, PPF, NPS and Indian stocks/IPOs, added and updated by chat. Values update from live prices; "what's my net worth?" shows allocation, gains and tax if sold today.
 - **Goals:** "₹20L for a car in 3 years", an emergency fund sized from your spending, targets in today's money. Fund them with linked investments (whole or a share), savings tagged to the goal and money held elsewhere; see progress, the after-tax monthly amount needed, your actual pace and whether you're on track.
@@ -50,6 +51,7 @@ Each message runs a [Gemini function-calling](https://ai.google.dev/gemini-api/d
 | `update_plan` | action | Change the income target, split or category limits |
 | `calculate_returns` | query | After-tax projection for FD/RD, PPF, NPS, Indian equity, international funds, US stocks or debt funds (USD amounts converted) |
 | `required_investment` | query | Lumpsum/monthly/yearly amount needed to reach an after-tax target |
+| `calculate_loan` | query | EMI calculator: from any three of loan amount, rate, tenure and EMI, computes the fourth, plus total interest and a yearly breakdown |
 | `search_mutual_funds` | query | Find Indian mutual fund scheme codes (mfapi.in) |
 | `search_us_stocks` | query | Find US tickers (Finnhub) |
 | `get_portfolio` | query | Holdings with live values, allocation, gains and tax if sold today |
@@ -162,6 +164,7 @@ src/
     backup.js           # Backup file export, validation and restore
     finance/
       calculators.js    # After-tax projections and required-contribution solver
+      loans.js          # EMI / loan amount / tenure / rate solver and amortisation
       taxRules.js       # Tax rates and instrument definitions
     prices/             # mfapi.in, Finnhub, Frankfurter clients and a native-aware HTTP helper
     budget.js           # Monthly metrics and money formatting

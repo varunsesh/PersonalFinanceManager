@@ -2,6 +2,7 @@ import { CATEGORIES, today } from './constants';
 import { computeMetrics } from './budget';
 import { CARD_TYPES, TX_TYPES, applyPlanUpdate, isValidDate, normalizeTransaction } from './validation';
 import { project, projectRange, requiredContribution } from './finance/calculators';
+import { amortize, solveLoan } from './finance/loans';
 import { INSTRUMENTS, TAX_RULES } from './finance/taxRules';
 import { usdToInr } from './prices/fx';
 import { latestNav, searchFunds } from './prices/mf';
@@ -170,6 +171,22 @@ export const TOOL_DECLARATIONS = [
         targetInTodaysMoney: { type: 'BOOLEAN', description: "True if the target is in today's money and should be grown by inflation" }
       },
       required: ['instrument', 'mode', 'targetAmount', 'years']
+    }
+  },
+  {
+    name: 'calculate_loan',
+    description:
+      'EMI calculator for home, car, personal or any reducing-balance loan. Give any three of loanAmount, annualRatePct, tenure (tenureMonths or tenureYears) and emi; the fourth is computed (e.g. EMI from amount+rate+tenure, affordable loan from EMI+rate+tenure, tenure from EMI, or the rate implied by an EMI). Returns total interest and a yearly breakdown. Never compute EMIs yourself. A card with sliders is shown automatically.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        loanAmount: { type: 'NUMBER', description: 'Principal borrowed, in rupees' },
+        annualRatePct: { type: 'NUMBER', description: 'Yearly interest rate, e.g. 8.5' },
+        tenureMonths: { type: 'NUMBER' },
+        tenureYears: { type: 'NUMBER', description: 'Use instead of tenureMonths when given in years' },
+        emi: { type: 'NUMBER', description: 'Monthly instalment in rupees' },
+        purpose: { type: 'STRING', description: 'Short label, e.g. "Home loan"' }
+      }
     }
   },
   {
@@ -548,6 +565,28 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
       params.amount = amount;
       pending.calcs.push({ kind: 'required', params, target, settings: settings.calc });
       return { requiredAmount: amount, perContribution: params.mode, targetInHand: target, ...summarize(project(params, settings.calc)) };
+    }
+    case 'calculate_loan': {
+      const num = (v) => (v == null || v === '' ? undefined : Number(v));
+      const months = num(args.tenureMonths) ?? (num(args.tenureYears) != null ? Math.round(num(args.tenureYears) * 12) : undefined);
+      const { params, solved, error } = solveLoan({
+        principal: num(args.loanAmount),
+        ratePct: num(args.annualRatePct),
+        months,
+        emi: num(args.emi)
+      });
+      if (error) return { error };
+      const purpose = args.purpose ? String(args.purpose).slice(0, 40) : undefined;
+      pending.calcs.push({ kind: 'loan', params, solved, purpose });
+      const { byYear, months: _months, ...totals } = amortize(params);
+      return {
+        computed: solved,
+        loanAmount: params.principal,
+        annualRatePct: params.ratePct,
+        tenureMonths: params.months,
+        ...totals,
+        byYear: byYear.length > 10 ? [...byYear.slice(0, 5), ...byYear.slice(-2)] : byYear
+      };
     }
     case 'search_mutual_funds': {
       const funds = (await searchFunds(String(args.query || ''))).slice(0, 10);
