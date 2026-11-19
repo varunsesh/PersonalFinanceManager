@@ -1,15 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { CATEGORIES } from '../lib/constants';
 import { useDbStore } from '../store/dbStore';
 import CategoryLimitsTable from './CategoryLimitsTable';
 import TransactionsTable from './TransactionsTable';
 
-export default function LedgerCard() {
+export default function LedgerCard({ initialTab = 'transactions', targetSeq }) {
   const transactions = useDbStore((s) => s.transactions);
-  const [activeTab, setActiveTab] = useState('transactions');
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab, targetSeq]);
 
   const filteredTransactions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

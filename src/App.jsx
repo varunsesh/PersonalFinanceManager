@@ -15,6 +15,7 @@ export default function App() {
   const markUpdatesSeen = useChatStore((s) => s.markUpdatesSeen);
   // Primary top-level view: 'chat' (default) | 'dashboard'
   const [activeView, setActiveView] = useState('chat');
+  const [dashboardTarget, setDashboardTarget] = useState({ tab: 'month', ledgerTab: 'transactions', seq: 0 });
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -23,6 +24,21 @@ export default function App() {
   const changeView = (view) => {
     setActiveView(view);
     if (view === 'dashboard') markUpdatesSeen();
+  };
+
+  const openDashboard = (target) => {
+    const next =
+      typeof target === 'string'
+        ? { tab: target }
+        : target && typeof target === 'object' && 'tab' in target
+          ? target
+          : {};
+    setDashboardTarget((prev) => ({
+      tab: next.tab || 'month',
+      ledgerTab: next.ledgerTab || 'transactions',
+      seq: prev.seq + 1
+    }));
+    changeView('dashboard');
   };
 
   if (!hydrated) {
@@ -47,11 +63,12 @@ export default function App() {
 
       {activeView === 'chat' ? (
         <Chat
-          onOpenDashboard={() => changeView('dashboard')}
+          onOpenDashboard={openDashboard}
+          onOpenSettings={() => setShowSettings(true)}
           onRequireApiKey={() => setShowKeyModal(true)}
         />
       ) : (
-        <Dashboard />
+        <Dashboard target={dashboardTarget} />
       )}
 
       {showKeyModal && <ApiKeyModal onClose={() => setShowKeyModal(false)} />}

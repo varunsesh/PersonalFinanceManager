@@ -62,13 +62,18 @@ export default function ThisMonthCard({ onOpenDashboard, onOpenSuggestions }) {
       </div>
 
       {/* Spending vs. how far through the month we are */}
-      <div className="relative mt-1.5 h-1.5 w-full rounded-full bg-slate-200/70">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-label="Toggle month details"
+        className="relative mt-1.5 block h-1.5 w-full cursor-pointer rounded-full bg-slate-200/70"
+      >
         <div
           className={`h-full rounded-full transition-all duration-500 ${over ? 'bg-rose-500' : fast ? 'bg-amber-500' : 'bg-indigo-500'}`}
           style={{ width: `${Math.min(100, m.spentPct)}%` }}
         />
         <div className="absolute -top-0.5 h-2.5 w-0.5 rounded bg-slate-500" style={{ left: `${m.elapsedPct}%` }} title="Today" />
-      </div>
+      </button>
 
       {open && (
         <div className="mt-2.5 space-y-2.5 pb-1">
@@ -96,10 +101,15 @@ export default function ThisMonthCard({ onOpenDashboard, onOpenSuggestions }) {
           {goals.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {goals.map((g) => (
-                <span key={g.id} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-700 shadow-sm ring-1 ring-slate-100">
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => onOpenDashboard?.({ tab: 'goals' })}
+                  className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-700 shadow-sm ring-1 ring-slate-100 hover:ring-indigo-300"
+                >
                   <span className={`h-1.5 w-1.5 rounded-full ${GOAL_DOT[g.status]}`} />
                   {g.name} <span className="font-semibold tabular-nums">{Math.round(g.progressPct)}%</span>
-                </span>
+                </button>
               ))}
             </div>
           )}
@@ -112,7 +122,7 @@ export default function ThisMonthCard({ onOpenDashboard, onOpenSuggestions }) {
             ) : (
               <span className="text-[11px] text-slate-400">No suggestions right now</span>
             )}
-            <button type="button" onClick={onOpenDashboard} className="text-[11px] font-semibold text-indigo-600 hover:underline">
+            <button type="button" onClick={() => onOpenDashboard?.({ tab: 'month' })} className="text-[11px] font-semibold text-indigo-600 hover:underline">
               Open plan →
             </button>
           </div>

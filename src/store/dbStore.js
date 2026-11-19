@@ -36,7 +36,7 @@ export const useDbStore = create(
 
       addTransactions: (txs) => set((s) => ({ transactions: [...txs, ...s.transactions] })),
       deleteTransaction: (id) => set((s) => ({ transactions: s.transactions.filter((t) => t.id !== id) })),
-      clearTransactions: () => set({ transactions: [] }),
+      clearTransactions: () => set({ transactions: [], suggestionState: { dismissed: {}, accepted: {} } }),
       setPlan: (plan) => set({ plan }),
       // Replace transactions, plan and holdings together, so a chat reply lands as one update
       applyBudget: ({ transactions, plan, holdings, goals, memories }) =>
@@ -53,8 +53,8 @@ export const useDbStore = create(
       // outcome: 'dismissed' | 'accepted' | null (reopen)
       setSuggestionOutcome: (id, outcome) =>
         set((s) => {
-          const dismissed = { ...s.suggestionState.dismissed };
-          const accepted = { ...s.suggestionState.accepted };
+          const dismissed = { ...(s.suggestionState?.dismissed ?? {}) };
+          const accepted = { ...(s.suggestionState?.accepted ?? {}) };
           delete dismissed[id];
           delete accepted[id];
           if (outcome === 'dismissed') dismissed[id] = new Date().toISOString();
@@ -92,12 +92,30 @@ export const useDbStore = create(
         }
         set({ apiKey });
       },
-      resetToDemo: () => set({ transactions: SAMPLE_TRANSACTIONS, plan: DEFAULT_PLAN, currency: '₹' })
+      resetToDemo: () =>
+        set({
+          transactions: SAMPLE_TRANSACTIONS,
+          plan: DEFAULT_PLAN,
+          currency: '₹',
+          suggestionState: { dismissed: {}, accepted: {} }
+        })
     }),
     {
       name: 'finchat-budget',
       storage: createIdbStorage(['transactions', 'plan', 'currency']),
-      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals, memories: s.memories, suggestionState: s.suggestionState })
+      partialize: (s) => ({ transactions: s.transactions, plan: s.plan, currency: s.currency, holdings: s.holdings, goals: s.goals, memories: s.memories, suggestionState: s.suggestionState }),
+      merge: (saved, current) => ({
+        ...current,
+        ...saved,
+        transactions: Array.isArray(saved?.transactions) ? saved.transactions : current.transactions,
+        holdings: Array.isArray(saved?.holdings) ? saved.holdings : current.holdings,
+        goals: Array.isArray(saved?.goals) ? saved.goals : current.goals,
+        memories: Array.isArray(saved?.memories) ? saved.memories : current.memories,
+        suggestionState: {
+          dismissed: saved?.suggestionState?.dismissed ?? {},
+          accepted: saved?.suggestionState?.accepted ?? {}
+        }
+      })
     }
   )
 );

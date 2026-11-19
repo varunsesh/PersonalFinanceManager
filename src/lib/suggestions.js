@@ -1,6 +1,6 @@
 import { today } from './constants';
-import { TAX_RULES } from './finance/taxRules';
-import { goalsOverview, monthsUntil } from './goals';
+import { INSTRUMENTS, TAX_RULES } from './finance/taxRules';
+import { addYears, allocatedShare, goalsOverview, monthsUntil } from './goals';
 import { currentValue } from './portfolio';
 
 // Suggestions the app proposes and the user decides on (Accept / Adjust /
@@ -61,7 +61,11 @@ function surplusSplit({ transactions, plan, overview }) {
   for (const g of open) {
     if (left < MIN_SPLIT) break;
     const need =
-      g.shortfallMonthly != null ? g.shortfallMonthly : g.kind === 'emergency' ? Math.max(0, (g.target - g.balance) / 6) : 0;
+      g.shortfallMonthly != null
+        ? g.shortfallMonthly
+        : g.kind === 'emergency'
+          ? Math.max(0, (g.target - g.balance) / 6)
+          : Math.max(0, (g.target - g.balance) / Math.max(1, g.monthsLeft || 12));
     const amount = round100(Math.min(need, left));
     if (amount >= MIN_SPLIT) {
       rows.push({ goalId: g.id, name: g.name, amount });
@@ -179,17 +183,27 @@ function goalRisk({ goals, holdings, overview }) {
 }
 
 export function buildSuggestions(ctx) {
-  const { goals, suggestionState = {} } = ctx;
-  const overview = goalsOverview(goals, ctx);
-  const all = [emergencyFund(ctx), surplusSplit({ ...ctx, overview }), ...fdMaturity({ ...ctx, overview }), taxHarvest(ctx), ...goalRisk({ ...ctx, overview })].filter(Boolean);
-  const closed = { ...(suggestionState.dismissed ?? {}), ...(suggestionState.accepted ?? {}) };
-  return all.filter((s) => !closed[s.id]);
+  const safeCtx = { ...ctx, goals: ctx.goals ?? [], holdings: ctx.holdings ?? [], transactions: ctx.transactions ?? [] };
+  const { goals, suggestionState = {} } = safeCtx;
+  const overview = goalsOverview(goals, safeCtx);
+  const all = [
+    emergencyFund(safeCtx),
+    surplusSplit({ ...safeCtx, overview }),
+    ...fdMaturity({ ...safeCtx, overview }),
+    taxHarvest(safeCtx),
+    ...goalRisk({ ...safeCtx, overview })
+  ].filter(Boolean);
+  const dismissed = suggestionState?.dismissed ?? {};
+  const accepted = suggestionState?.accepted ?? {};
+  // Emergency fund and FD maturity already disappear while the goal exists or
+  // after the FD is removed; don't block them forever if the goal is later deleted.
+  return all.filter((s) => !dismissed[s.id] && !(accepted[s.id] && s.kind !== 'emergency_fund' && s.kind !== 'fd_maturity'));
 }
 
 // Turn an accepted suggestion (with the user's adjustments) into a result for
 // applyAssistantResult. Returns null for suggestions that don't change data.
-export function suggestionToResult(s, proposal, { holdings, goals }, idBase = Date.now()) {
-  const base = { idBase, transactions: [], goalsAdded: [], goalEdits: [], holdingEdits: [], holdingRemoveIds: [] };
+export function suggestionToResult(s, proposal = {}, { holdings = [], goals = [] }, idBase = Date.now()) {
+  const base = { idBase, transactions: [], planUpdate: null, goalsAdded: [], goalEdits: [], holdingEdits: [], holdingRemoveIds: [] };
   const date = today();
   switch (s.kind) {
     case 'emergency_fund':
@@ -199,7 +213,7 @@ export function suggestionToResult(s, proposal, { holdings, goals }, idBase = Da
           {
             id: `goal-${idBase}-0`,
             kind: 'emergency',
-            name: 'Emergency fund',
+            name: proposal.name || 'Emergency fund',
             priority: 1,
             emergencyMonths: Math.max(1, Number(proposal.months) || 6),
             instrument: 'fd',
@@ -210,10 +224,41 @@ export function suggestionToResult(s, proposal, { holdings, goals }, idBase = Da
           }
         ]
       };
+    case 'create_goal': {
+      const targetAmount = Number(proposal.targetAmount);
+      const years = Number(proposal.years);
+      if (!(targetAmount > 0) || !(years > 0)) return null;
+      const instrument = INSTRUMENTS[proposal.instrument]
+        ? proposal.instrument
+        : years < 3
+          ? 'fd'
+          : years < 5
+            ? 'debt_mf'
+            : 'equity_in';
+      return {
+        ...base,
+        goalsAdded: [
+          {
+            id: `goal-${idBase}-0`,
+            kind: 'target',
+            name: String(proposal.name || 'Goal').trim(),
+            targetAmount,
+            targetDate: addYears(years, date),
+            targetInTodaysMoney: Boolean(proposal.targetInTodaysMoney),
+            instrument,
+            ...(Number.isFinite(Number(proposal.ratePct)) && Number(proposal.ratePct) > 0 ? { ratePct: Number(proposal.ratePct) } : {}),
+            priority: [1, 2, 3].includes(Number(proposal.priority)) ? Number(proposal.priority) : 2,
+            otherBalance: 0,
+            links: [],
+            createdAt: new Date().toISOString()
+          }
+        ]
+      };
+    }
     case 'surplus_split':
       return {
         ...base,
-        transactions: proposal.rows
+        transactions: (proposal.rows ?? [])
           .filter((r) => Number(r.amount) > 0)
           .map((r) => ({
             description: `Saved for ${r.name}`,
@@ -225,12 +270,68 @@ export function suggestionToResult(s, proposal, { holdings, goals }, idBase = Da
             goalId: r.goalId
           }))
       };
-    case 'fd_maturity': {
+    case 'log_savings': {
+      const amount = Number(proposal.amount);
+      if (!(amount > 0)) return null;
+      const goal = proposal.goalId ? goals.find((g) => g.id === proposal.goalId) : null;
+      return {
+        ...base,
+        transactions: [
+          {
+            description: String(proposal.description || (goal ? `Saved for ${goal.name}` : 'Savings & Investment')).trim(),
+            amount,
+            type: 'savings',
+            bucket: 'savings',
+            category: 'Savings & Investments',
+            date,
+            ...(goal ? { goalId: goal.id } : {})
+          }
+        ]
+      };
+    }
+    case 'plan_update': {
+      const planUpdate = {};
+      if (proposal.monthlyIncomeTarget != null && Number(proposal.monthlyIncomeTarget) > 0) {
+        planUpdate.monthlyIncomeTarget = Number(proposal.monthlyIncomeTarget);
+      }
+      ['needsRatio', 'wantsRatio', 'savingsRatio'].forEach((k) => {
+        if (proposal[k] != null && proposal[k] !== '' && Number.isFinite(Number(proposal[k]))) {
+          planUpdate[k] = Number(proposal[k]);
+        }
+      });
+      if (proposal.category && proposal.limit != null && proposal.limit !== '' && Number(proposal.limit) >= 0) {
+        planUpdate.categoryLimitUpdates = [{ category: proposal.category, limit: Number(proposal.limit) }];
+      }
+      if (Object.keys(planUpdate).length === 0) return null;
+      return { ...base, planUpdate };
+    }
+    case 'link_holding': {
       const goal = goals.find((g) => g.id === proposal.goalId);
+      const holding = holdings.find((h) => h.id === proposal.holdingId);
+      const sharePct = Number(proposal.sharePct ?? 100);
+      if (!goal || !holding || !(sharePct > 0 && sharePct <= 100)) return null;
+      const used = allocatedShare(goals, holding.id, goal.id);
+      if (used + sharePct > 100) return null;
+      const links = (goal.links ?? []).filter((l) => l.holdingId !== holding.id);
+      links.push({ holdingId: holding.id, sharePct });
+      return { ...base, goalEdits: [{ before: goal, after: { ...goal, links } }] };
+    }
+    case 'fd_maturity': {
+      const value = Math.max(0, Number(proposal.value) || 0);
+      const goalEdits = goals
+        .filter((g) => g.id === proposal.goalId || (g.links ?? []).some((l) => l.holdingId === proposal.holdingId))
+        .map((g) => ({
+          before: g,
+          after: {
+            ...g,
+            links: (g.links ?? []).filter((l) => l.holdingId !== proposal.holdingId),
+            ...(g.id === proposal.goalId ? { otherBalance: (g.otherBalance ?? 0) + value } : {})
+          }
+        }));
       return {
         ...base,
         holdingRemoveIds: [proposal.holdingId],
-        goalEdits: goal ? [{ before: goal, after: { ...goal, otherBalance: (goal.otherBalance ?? 0) + Number(proposal.value || 0) } }] : []
+        goalEdits
       };
     }
     case 'tax_harvest': {

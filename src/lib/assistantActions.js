@@ -2,7 +2,7 @@ import { CATEGORIES } from './constants';
 import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './validation';
 import { currentValue, portfolioSummary } from './portfolio';
 import { goalsOverview } from './goals';
-import { calcSettings } from '../store/settingsStore';
+import { calcSettings, DEFAULT_SETTINGS } from '../store/settingsStore';
 
 const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})`;
 
@@ -277,16 +277,17 @@ export function budgetAlerts(before, after, plan, fmt) {
 
 // Data for an inline chat card, captured when the reply is made so the card
 // keeps showing what the reply talked about.
-export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], planning } = {}) {
+export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], planning = DEFAULT_SETTINGS, suggestions = [] } = {}) {
   if (!CARD_TYPES.includes(type) || type === 'none') return null;
-  // Suggestions are rendered live (they change as the user accepts or dismisses them)
-  if (type === 'suggestions') return { type, month: metrics.month };
+  // Suggestions are rendered live (they change as the user accepts or dismisses them),
+  // alongside any conversation-specific suggestions proposed in this reply.
+  if (type === 'suggestions') return { type, month: metrics.month, ...(suggestions.length > 0 ? { suggestions } : {}) };
   if (type === 'goals') {
     const overview = goalsOverview(goals, {
       holdings,
       transactions,
       plan,
-      settings: { calc: calcSettings(planning), defaultReturns: planning.defaultReturns }
+      settings: { calc: calcSettings(planning), defaultReturns: planning.defaultReturns ?? DEFAULT_SETTINGS.defaultReturns }
     });
     return { type, month: metrics.month, data: overview };
   }
@@ -341,4 +342,13 @@ export function buildCard(type, metrics, plan, { holdings = [], goals = [], tran
       .sort((a, b) => b.spent - a.spent)
       .slice(0, 6)
   };
+}
+
+export function buildCards(types, metrics, plan, opts = {}) {
+  const list = Array.isArray(types) ? types : types ? [types] : [];
+  const seen = new Set();
+  return list
+    .filter((t) => t && !seen.has(t) && seen.add(t))
+    .map((t) => buildCard(t, metrics, plan, opts))
+    .filter(Boolean);
 }

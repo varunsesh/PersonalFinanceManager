@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BarChart3, PieChart as PieChartIcon } from 'lucide-react';
 import AllocationBarChart from '../components/AllocationBarChart';
 import DataControls from '../components/DataControls';
@@ -18,7 +18,7 @@ const TABS = [
 const monthLabel = (month) =>
   new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: 'long', year: 'numeric' });
 
-function ThisMonth() {
+function ThisMonth({ ledgerTab, targetSeq }) {
   const metrics = useBudgetMetrics();
   const ratios = useDbStore((s) => s.plan.ratios);
   return (
@@ -46,15 +46,20 @@ function ThisMonth() {
         </div>
       </div>
 
-      <LedgerCard />
+      <LedgerCard initialTab={ledgerTab} targetSeq={targetSeq} />
       <DataControls />
     </>
   );
 }
 
 // The Plan view: this month's budget, goals and investments.
-export default function Dashboard() {
-  const [tab, setTab] = useState('month');
+export default function Dashboard({ target }) {
+  const [tab, setTab] = useState(target?.tab || 'month');
+
+  useEffect(() => {
+    if (target?.tab) setTab(target.tab);
+  }, [target?.tab, target?.seq]);
+
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-5xl w-full mx-auto p-3 sm:p-4 space-y-4 pb-10">
@@ -62,6 +67,7 @@ export default function Dashboard() {
           {TABS.map(([key, label]) => (
             <button
               key={key}
+              type="button"
               onClick={() => setTab(key)}
               className={`rounded-lg py-1.5 text-xs font-semibold transition-all ${
                 tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
@@ -71,7 +77,7 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
-        {tab === 'month' && <ThisMonth />}
+        {tab === 'month' && <ThisMonth ledgerTab={target?.ledgerTab} targetSeq={target?.seq} />}
         {tab === 'goals' && <GoalsSection />}
         {tab === 'investments' && <PortfolioSection />}
       </div>

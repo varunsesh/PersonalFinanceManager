@@ -115,7 +115,7 @@ export default function LoanCard({ calc }) {
 
         {p && view.plan.byYear.length > 0 && (
           <details className="group text-[11px] text-slate-500">
-            <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-slate-600">
+            <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-slate-600 [&::-webkit-details-marker]:hidden">
               <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
               Year-by-year
             </summary>

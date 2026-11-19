@@ -3,8 +3,29 @@ import ChatCard from './ChatCard';
 import LoanCard from './LoanCard';
 import ReturnsCard from './ReturnsCard';
 
-export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk }) {
+function openForBadge(badge, onOpenDashboard, onOpenSettings) {
+  if (/^(Remembered|Updated memory|Forgot):/i.test(badge)) {
+    onOpenSettings?.();
+    return;
+  }
+  if (/^(New|Updated|Deleted) goal\b/i.test(badge)) {
+    onOpenDashboard?.({ tab: 'goals' });
+    return;
+  }
+  if (/^(Added|Updated|Removed holding)\b/i.test(badge)) {
+    onOpenDashboard?.({ tab: 'investments' });
+    return;
+  }
+  if (/\blimit:/i.test(badge)) {
+    onOpenDashboard?.({ tab: 'month', ledgerTab: 'plan' });
+    return;
+  }
+  onOpenDashboard?.({ tab: 'month', ledgerTab: 'transactions' });
+}
+
+export default function ChatMessage({ message: m, onBadgeClick, onOpenSettings, onUndo, onAsk }) {
   const canUndo = Boolean(m.changes) && !m.undone;
+  const cards = m.cards?.length ? m.cards : m.card ? [m.card] : [];
 
   return (
     <div className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -17,7 +38,7 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk })
       </div>
       <div
         className={`max-w-[84%] space-y-1.5 ${m.role === 'user' ? 'items-end' : 'items-start'} ${
-          m.card || m.calcCards?.length ? 'w-full' : ''
+          cards.length || m.calcCards?.length ? 'w-full' : ''
         }`}
       >
         <div
@@ -30,7 +51,9 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk })
           {m.text}
         </div>
 
-        {m.card && <ChatCard card={m.card} onAsk={onAsk} />}
+        {cards.map((card, i) => (
+          <ChatCard key={`${card.type}-${i}`} card={card} onAsk={onAsk} onOpenDashboard={onBadgeClick} />
+        ))}
         {m.calcCards?.map((calc, i) => (
           calc.kind === 'loan' ? <LoanCard key={i} calc={calc} /> : <ReturnsCard key={i} calc={calc} />
         ))}
@@ -41,7 +64,7 @@ export default function ChatMessage({ message: m, onBadgeClick, onUndo, onAsk })
               <button
                 key={i}
                 type="button"
-                onClick={onBadgeClick}
+                onClick={() => openForBadge(b, onBadgeClick, onOpenSettings)}
                 disabled={m.undone}
                 className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md border transition-colors ${
                   m.undone

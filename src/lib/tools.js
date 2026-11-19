@@ -10,7 +10,7 @@ import { searchUsSymbols } from './prices/us';
 import { createHolding, currentValue, portfolioSummary } from './portfolio';
 import { addYears, allocatedShare, goalsOverview, goalStatus } from './goals';
 import { MAX_MEMORIES, MEMORY_TOPICS, validateMemory } from './memory';
-import { buildSuggestions } from './suggestions';
+import { buildSuggestions, suggestionToResult } from './suggestions';
 
 // Gemini function declarations. Query tools run locally over the full history,
 // so only their results (never the whole ledger) are sent to the model. Action
@@ -332,13 +332,48 @@ export const TOOL_DECLARATIONS = [
   {
     name: 'get_suggestions',
     description:
-      "The app's current suggestions for the user (surplus split across goals, emergency fund, FD maturities, tax-free gain harvesting, goals at risk). The user accepts, adjusts or dismisses them in a card; you never apply them yourself.",
+      "The app's current suggestions for the user (surplus split across goals, emergency fund, FD maturities, tax-free gain harvesting, goals at risk). Automatically shows the suggestions card when open suggestions exist; you never apply them yourself.",
     parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
+    name: 'propose_suggestion',
+    description:
+      'Attach an interactive suggestion card (Accept / Adjust / Dismiss) to your reply when you recommend a concrete action based on the conversation — creating a goal, setting up an emergency fund, changing a category limit or budget split, logging monthly savings, linking a holding to a goal, or suggesting a follow-up question. Use this instead of applying unrequested changes or writing plain-text-only recommendations.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        kind: {
+          type: 'STRING',
+          enum: ['create_goal', 'emergency_fund', 'plan_update', 'log_savings', 'link_holding', 'advice']
+        },
+        title: { type: 'STRING', description: 'Short actionable headline, e.g. "Set Dining & Coffee limit to ₹8,000"' },
+        reason: { type: 'STRING', description: '1-2 sentences explaining why, grounded in the user\'s numbers' },
+        name: { type: 'STRING', description: 'create_goal: goal name' },
+        targetAmount: { type: 'NUMBER', description: 'create_goal: target amount in rupees' },
+        years: { type: 'NUMBER', description: 'create_goal: years until target' },
+        targetInTodaysMoney: { type: 'BOOLEAN', description: 'create_goal: grow target by inflation' },
+        instrument: { type: 'STRING', enum: Object.keys(INSTRUMENTS), description: 'create_goal: instrument for contributions' },
+        months: { type: 'NUMBER', description: 'emergency_fund: months of expenses (default 6)' },
+        monthlyIncomeTarget: { type: 'NUMBER', description: 'plan_update: monthly income target' },
+        needsRatio: { type: 'NUMBER', description: 'plan_update: Needs %' },
+        wantsRatio: { type: 'NUMBER', description: 'plan_update: Wants %' },
+        savingsRatio: { type: 'NUMBER', description: 'plan_update: Savings %' },
+        category: { type: 'STRING', enum: CATEGORIES, description: 'plan_update: category whose limit to set' },
+        limit: { type: 'NUMBER', description: 'plan_update: monthly limit for category' },
+        amount: { type: 'NUMBER', description: 'log_savings: rupees to save this month' },
+        description: { type: 'STRING', description: 'log_savings: short description' },
+        goalId: { type: 'STRING', description: 'log_savings or link_holding: existing goal id' },
+        holdingId: { type: 'STRING', description: 'link_holding: existing holding id' },
+        sharePct: { type: 'NUMBER', description: 'link_holding: % of holding to earmark (1-100, default 100)' },
+        chatPrompt: { type: 'STRING', description: 'advice: follow-up question sent when the user taps Ask FinChat' }
+      },
+      required: ['kind', 'title', 'reason']
+    }
   },
   {
     name: 'show_card',
     description:
-      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings), "goals" (goal progress) or "suggestions" (live suggestions with Accept/Adjust/Dismiss buttons).',
+      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings), "goals" (goal progress) or "suggestions" (live suggestions with Accept/Adjust/Dismiss buttons). You may call show_card more than once if multiple cards help.',
     parameters: {
       type: 'OBJECT',
       properties: { type: { type: 'STRING', enum: CARD_TYPES.filter((t) => t !== 'none') } },
@@ -490,6 +525,15 @@ function stageGoalEdit(pending, before, after) {
   pending.goalEdits = pending.goalEdits.filter((e) => e.before.id !== before.id);
   pending.goalEdits.push({ before, after });
 }
+
+function addCard(pending, type) {
+  if (!CARD_TYPES.includes(type) || type === 'none') return;
+  pending.cards ??= [];
+  if (!pending.cards.includes(type)) pending.cards.push(type);
+  pending.card = type;
+}
+
+const dedupeById = (items) => [...new Map(items.map((x) => [x.id, x])).values()];
 
 // Converts a USD amount to rupees, returning a note for the model and card.
 async function toInr(amount, currency) {
@@ -693,11 +737,12 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
     case 'link_holding_to_goal': {
       const { goal, fresh } = findGoal(args.goalId, state, pending);
       if (!goal) return { error: `No goal with id ${args.goalId}` };
-      const holding = (state.holdings ?? []).find((h) => h.id === args.holdingId);
+      const allHoldings = dedupeById([...(state.holdings ?? []), ...pending.holdingsAdded]);
+      const holding = allHoldings.find((h) => h.id === args.holdingId);
       if (!holding) return { error: `No holding with id ${args.holdingId}` };
       const sharePct = args.sharePct == null ? 100 : Number(args.sharePct);
       if (!(sharePct >= 0 && sharePct <= 100)) return { error: 'sharePct must be 0-100' };
-      const allGoals = [...(state.goals ?? []), ...pending.goalsAdded];
+      const allGoals = dedupeById([...(state.goals ?? []), ...pending.goalsAdded]);
       const used = allocatedShare(allGoals, holding.id, goal.id);
       if (used + sharePct > 100) {
         return { error: `${holding.name} already has ${used}% earmarked for other goals; at most ${100 - used}% is free` };
@@ -710,14 +755,132 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
     }
     case 'get_suggestions': {
       const list = buildSuggestions({ ...goalCtx(state, settings), goals: state.goals ?? [], suggestionState: state.suggestionState });
+      if (list.length > 0) addCard(pending, 'suggestions');
       return { suggestions: list.map(({ id, kind, title, reason, proposal }) => ({ id, kind, title, reason, proposal })) };
     }
+    case 'propose_suggestion': {
+      const title = String(args.title || '').trim();
+      const reason = String(args.reason || '').trim();
+      if (!title || !reason) return { error: 'title and reason are required' };
+      pending.suggestions ??= [];
+      const id = `prop-${pending.idBase}-${pending.suggestions.length}`;
+      const allGoals = dedupeById([...(state.goals ?? []), ...pending.goalsAdded]);
+      const allHoldings = dedupeById([...(state.holdings ?? []), ...pending.holdingsAdded]);
+
+      let suggestion;
+      switch (args.kind) {
+        case 'emergency_fund': {
+          if (allGoals.some((g) => g.kind === 'emergency')) return { error: 'An emergency fund goal already exists' };
+          suggestion = {
+            id,
+            kind: 'emergency_fund',
+            title,
+            reason,
+            proposal: { months: Math.max(1, Number(args.months) || 6) },
+            acceptLabel: 'Create goal'
+          };
+          break;
+        }
+        case 'create_goal': {
+          const targetAmount = Number(args.targetAmount);
+          const years = Number(args.years);
+          if (!(targetAmount > 0)) return { error: 'targetAmount must be positive' };
+          if (!(years > 0 && years <= 60)) return { error: 'years must be between 0.25 and 60' };
+          suggestion = {
+            id,
+            kind: 'create_goal',
+            title,
+            reason,
+            proposal: {
+              name: String(args.name || title).trim(),
+              targetAmount,
+              years,
+              targetInTodaysMoney: Boolean(args.targetInTodaysMoney),
+              ...(INSTRUMENTS[args.instrument] ? { instrument: args.instrument } : {})
+            },
+            acceptLabel: 'Create goal'
+          };
+          break;
+        }
+        case 'plan_update': {
+          const proposal = {
+            ...(args.monthlyIncomeTarget != null && { monthlyIncomeTarget: Number(args.monthlyIncomeTarget) }),
+            ...(args.needsRatio != null && { needsRatio: Number(args.needsRatio) }),
+            ...(args.wantsRatio != null && { wantsRatio: Number(args.wantsRatio) }),
+            ...(args.savingsRatio != null && { savingsRatio: Number(args.savingsRatio) }),
+            ...(args.category && args.limit != null && { category: args.category, limit: Number(args.limit) })
+          };
+          const res = suggestionToResult({ kind: 'plan_update' }, proposal, { holdings: allHoldings, goals: allGoals });
+          if (!res?.planUpdate) return { error: 'Include a valid category+limit, monthlyIncomeTarget, or ratio to update' };
+          const check = applyPlanUpdate(state.plan, res.planUpdate, fmt);
+          if (check.applied.length === 0) return { error: check.skipped.join('; ') || 'Invalid plan update' };
+          suggestion = { id, kind: 'plan_update', title, reason, proposal, acceptLabel: 'Update plan' };
+          break;
+        }
+        case 'log_savings': {
+          const amount = Number(args.amount);
+          if (!(amount > 0)) return { error: 'amount must be positive' };
+          const goal = args.goalId ? allGoals.find((g) => g.id === args.goalId) : null;
+          if (args.goalId && !goal) return { error: `No goal with id ${args.goalId}` };
+          suggestion = {
+            id,
+            kind: 'log_savings',
+            title,
+            reason,
+            proposal: {
+              amount,
+              ...(args.description && { description: String(args.description).trim() }),
+              ...(goal && { goalId: goal.id, goalName: goal.name })
+            },
+            acceptLabel: 'Log as saved'
+          };
+          break;
+        }
+        case 'link_holding': {
+          const goal = allGoals.find((g) => g.id === args.goalId);
+          if (!goal) return { error: `No goal with id ${args.goalId}` };
+          const holding = allHoldings.find((h) => h.id === args.holdingId);
+          if (!holding) return { error: `No holding with id ${args.holdingId}` };
+          const sharePct = args.sharePct == null ? 100 : Number(args.sharePct);
+          if (!(sharePct > 0 && sharePct <= 100)) return { error: 'sharePct must be 1-100' };
+          const used = allocatedShare(allGoals, holding.id, goal.id);
+          if (used + sharePct > 100) {
+            return { error: `${holding.name} already has ${used}% earmarked for other goals; at most ${100 - used}% is free` };
+          }
+          suggestion = {
+            id,
+            kind: 'link_holding',
+            title,
+            reason,
+            proposal: { goalId: goal.id, goalName: goal.name, holdingId: holding.id, holdingName: holding.name, sharePct },
+            acceptLabel: 'Link to goal'
+          };
+          break;
+        }
+        case 'advice':
+          suggestion = {
+            id,
+            kind: 'advice',
+            title,
+            reason,
+            proposal: {},
+            ...(args.chatPrompt && { chatPrompt: String(args.chatPrompt).trim() })
+          };
+          break;
+        default:
+          return { error: `Unknown suggestion kind ${args.kind}` };
+      }
+
+      pending.suggestions.push(suggestion);
+      addCard(pending, 'suggestions');
+      return { proposed: { id: suggestion.id, kind: suggestion.kind, title: suggestion.title } };
+    }
     case 'get_goals':
-      return goalsOverview([...(state.goals ?? [])], goalCtx(state, settings));
+      return goalsOverview(dedupeById([...(state.goals ?? []), ...pending.goalsAdded]), goalCtx(state, settings));
     case 'remember': {
       const { text, topic, error } = validateMemory(args.fact, args.topic);
       if (error) return { error };
-      const existing = [...(state.memories ?? []), ...pending.memoriesAdded];
+      const existing = dedupeById([...(state.memories ?? []), ...pending.memoriesAdded]);
       if (existing.length >= MAX_MEMORIES) return { error: `Memory is full (${MAX_MEMORIES} facts). Ask the user what to forget.` };
       const dupe = existing.find((m) => m.text.toLowerCase() === text.toLowerCase());
       if (dupe) return { alreadyRemembered: dupe.id };
@@ -750,7 +913,7 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
     }
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
-      pending.card = args.type;
+      addCard(pending, args.type);
       return { shown: args.type };
     default:
       return { error: `Unknown tool ${name}` };

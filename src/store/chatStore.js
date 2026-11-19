@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { INITIAL_MESSAGES, nowTime } from '../lib/constants';
 import { computeMetrics, formatMoney } from '../lib/budget';
-import { applyAssistantResult, budgetAlerts, buildCard, undoChanges } from '../lib/assistantActions';
+import { applyAssistantResult, budgetAlerts, buildCards, undoChanges } from '../lib/assistantActions';
 import { runAssistant, toGeminiHistory } from '../lib/gemini';
 import { suggestionToResult } from '../lib/suggestions';
 import { createIdbStorage } from './idbStorage';
@@ -13,6 +13,9 @@ import { calcSettings, useSettingsStore } from './settingsStore';
 // parsed changes straight into dbStore, so every view subscribed to dbStore
 // updates as soon as the reply is applied. Each assistant message keeps a
 // record of what it changed (`changes`) so it can be undone.
+let msgSeq = 0;
+const nextMsgId = () => `msg-${Date.now()}-${++msgSeq}`;
+
 export const useChatStore = create(
   persist(
     (set, get) => ({
@@ -28,7 +31,7 @@ export const useChatStore = create(
         if (!text || get().isSending) return;
 
         const history = toGeminiHistory(get().messages);
-        const userMsg = { id: `msg-${Date.now()}`, role: 'user', timestamp: nowTime(), text };
+        const userMsg = { id: nextMsgId(), role: 'user', timestamp: nowTime(), text };
         set((s) => ({ messages: [...s.messages, userMsg], isSending: true }));
 
         try {
@@ -55,20 +58,24 @@ export const useChatStore = create(
           if (applied.changes) db.applyBudget(applied);
 
           const reply = typeof result.reply === 'string' && result.reply.trim() ? result.reply : 'Done.';
+          const cardTypes = result.cards?.length ? result.cards : result.card ? [result.card] : [];
+          const cards = buildCards(cardTypes, after, applied.plan, {
+            holdings: applied.holdings,
+            goals: applied.goals,
+            transactions: applied.transactions,
+            planning,
+            suggestions: result.suggestions ?? []
+          });
           const aiMsg = {
-            id: `msg-${Date.now() + 1}`,
+            id: nextMsgId(),
             role: 'assistant',
             timestamp: nowTime(),
             text: applied.skipped.length > 0 ? `${reply}\n\n⚠️ Not applied: ${applied.skipped.join('; ')}.` : reply,
             badges: applied.badges,
             changes: applied.changes,
             alerts: budgetAlerts(before, after, applied.plan, fmt),
-            card: buildCard(result.card, after, applied.plan, {
-              holdings: applied.holdings,
-              goals: applied.goals,
-              transactions: applied.transactions,
-              planning
-            }),
+            card: cards[0] ?? null,
+            cards,
             calcCards: result.calcs
           };
           set((s) => ({
@@ -77,7 +84,7 @@ export const useChatStore = create(
           }));
         } catch (err) {
           const errorMsg = {
-            id: `msg-${Date.now() + 1}`,
+            id: nextMsgId(),
             role: 'assistant',
             timestamp: nowTime(),
             text: `Could not reach Gemini (${err.message}). Check your API key in Settings or switch to Dashboard to log offline.`,
@@ -94,15 +101,15 @@ export const useChatStore = create(
       acceptSuggestion: (suggestion, proposal) => {
         const db = useDbStore.getState();
         const result = suggestionToResult(suggestion, proposal, db);
-        db.setSuggestionOutcome(suggestion.id, 'accepted');
-        if (!result) return;
+        if (!result) return false;
         const fmt = (v) => formatMoney(v, db.currency);
         const applied = applyAssistantResult(result, db, fmt);
-        if (!applied.changes) return;
+        if (!applied.changes) return false;
         const before = computeMetrics(db.transactions, db.plan);
         db.applyBudget(applied);
+        db.setSuggestionOutcome(suggestion.id, 'accepted');
         const msg = {
-          id: `msg-${Date.now()}`,
+          id: nextMsgId(),
           role: 'assistant',
           timestamp: nowTime(),
           text: `Done: ${suggestion.title}.`,
@@ -112,6 +119,7 @@ export const useChatStore = create(
           suggestionId: suggestion.id
         };
         set((s) => ({ messages: [...s.messages, msg], hasNewUpdates: true }));
+        return true;
       },
 
       undoMessage: (id) => {

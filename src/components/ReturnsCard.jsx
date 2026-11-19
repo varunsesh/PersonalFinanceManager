@@ -122,12 +122,28 @@ export default function ReturnsCard({ calc }) {
           )}
 
           <div className="space-y-2">
-            <Slider label="Expected return" value={ratePct} min={0} max={20} step={0.5} suffix="%" onChange={setRatePct} />
-            <Slider label="Years" value={years} min={1} max={40} step={1} suffix="" onChange={setYears} />
+            <Slider
+              label="Expected return"
+              value={ratePct}
+              min={0}
+              max={Math.max(20, Math.ceil(params.ratePct))}
+              step={Number.isInteger(params.ratePct * 2) ? 0.5 : 0.05}
+              suffix="%"
+              onChange={setRatePct}
+            />
+            <Slider
+              label="Years"
+              value={years}
+              min={params.years < 1 ? 0.25 : 1}
+              max={Math.max(40, Math.ceil(params.years))}
+              step={params.years % 1 === 0 ? 1 : 0.25}
+              suffix=""
+              onChange={setYears}
+            />
           </div>
 
           <details className="group text-[11px] text-slate-500">
-            <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-slate-600">
+            <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-slate-600 [&::-webkit-details-marker]:hidden">
               <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
               Assumptions & notes
             </summary>

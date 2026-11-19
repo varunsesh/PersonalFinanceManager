@@ -81,7 +81,7 @@ export default function PortfolioSection() {
 
         {summary.taxLines.length > 0 && (
           <details className="group text-[11px] text-slate-500">
-            <summary className="cursor-pointer list-none font-medium text-slate-600">
+            <summary className="cursor-pointer list-none font-medium text-slate-600 [&::-webkit-details-marker]:hidden">
               Tax if sold today: {formatShortINR(summary.exitTax)} (incl. cess) ›
             </summary>
             <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
