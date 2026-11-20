@@ -7,7 +7,8 @@ export function formatMoney(val, currency) {
 
 // Totals for one month (YYYY-MM, default the current month), since the plan's
 // income target and 50/30/20 split are monthly. Older transactions stay in
-// the ledger but don't count here.
+// the ledger but don't count here. Pass the ledger (with EMI instalments);
+// credit card bill payments are transfers and never count.
 export function computeMetrics(transactions, plan, month = currentMonth()) {
   let totalIncome = 0;
   let totalExpenses = 0;
@@ -16,7 +17,7 @@ export function computeMetrics(transactions, plan, month = currentMonth()) {
   const byCategory = {};
 
   transactions.forEach((tx) => {
-    if (!String(tx.date).startsWith(month)) return;
+    if (!String(tx.date).startsWith(month) || tx.type === 'card_payment') return;
     const amt = Number(tx.amount) || 0;
     if (tx.type === 'income' || tx.bucket === 'income') {
       totalIncome += amt;
@@ -93,7 +94,7 @@ export function monthSnapshot(transactions, plan, isoToday) {
     if (!t.date.startsWith(month)) return;
     if (t.type === 'income') income += t.amount;
     else if (t.type === 'expense') spent += t.amount;
-    else saved += t.amount;
+    else if (t.type === 'savings') saved += t.amount;
   });
   const usingTarget = income <= 0;
   const base = usingTarget ? plan.monthlyIncomeTarget : income;

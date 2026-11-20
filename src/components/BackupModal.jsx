@@ -64,8 +64,8 @@ export default function BackupModal({ onClose }) {
         </div>
 
         <p className="text-xs leading-relaxed text-slate-600">
-          Your data lives only on this phone. A backup file holds your transactions, plan, investments, goals, remembered
-          facts, chat and settings (not API keys). Save it somewhere safe, like Google Drive.
+          Your data lives only on this phone. A backup file holds your transactions, plan, investments, goals, credit cards
+          and EMIs, remembered facts, chat and settings (not API keys). Save it somewhere safe, like Google Drive.
         </p>
         <div className="text-[11px] text-slate-500">Last backup: <span className="font-semibold text-slate-700">{when(lastBackupAt)}</span></div>
 
@@ -77,7 +77,8 @@ export default function BackupModal({ onClose }) {
                 <div className="font-semibold">Replace all data on this phone?</div>
                 <div className="mt-1 text-amber-800">
                   Backup from {when(pending.summary.exportedAt)}: {pending.summary.transactions} transactions,{' '}
-                  {pending.summary.holdings} investments, {pending.summary.goals} goals, {pending.summary.memories} remembered facts,{' '}
+                  {pending.summary.holdings} investments, {pending.summary.goals} goals, {pending.summary.creditCards} credit cards,{' '}
+                  {pending.summary.memories} remembered facts,{' '}
                   {pending.summary.messages} chat messages. Back up your current data first if you might need it.
                 </div>
               </div>

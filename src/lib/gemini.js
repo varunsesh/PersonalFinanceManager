@@ -1,6 +1,7 @@
 import { CATEGORIES, currentMonth, today } from './constants';
 import { applyAssistantResult } from './assistantActions';
 import { buildSuggestions } from './suggestions';
+import { ledgerOf } from './credit';
 import { TOOL_DECLARATIONS, budgetStatus, executeTool } from './tools';
 
 const HISTORY_TURNS = 10;
@@ -31,7 +32,7 @@ function systemInstruction(state, currency, settings) {
   const earliest = state.transactions.reduce((m, t) => (t.date < m ? t.date : m), date);
   const openSuggestions = settings
     ? buildSuggestions({
-        transactions: state.transactions,
+        transactions: ledgerOf(state),
         plan: state.plan,
         holdings: state.holdings ?? [],
         goals: state.goals ?? [],
@@ -51,6 +52,9 @@ Investments: ${state.holdings?.length ? `${state.holdings.length} holdings: ${st
 What you know about the user (saved with the remember tool; use it when advising):
 ${state.memories?.length ? state.memories.map((m) => `- ${m.id} [${m.topic}] ${m.text}`).join('\n') : '- nothing yet'}
 
+Credit cards: ${state.creditCards?.length ? state.creditCards.map((c) => `${c.id} ${c.name}`).join('; ') + '. Call get_credit_cards for balances.' : 'none yet.'}
+EMI plans: ${state.cardEmis?.length ? state.cardEmis.map((e) => `${e.id} ${e.description} on ${e.cardId} (${e.principal} over ${e.months} months from ${e.startDate})`).join('; ') : 'none.'}
+
 Goals: ${state.goals?.length ? state.goals.map((g) => `${g.id} ${g.name}`).join('; ') + '. Call get_goals for progress.' : 'none yet.'}
 
 Open suggestions: ${openSuggestions.length ? openSuggestions.map((s) => `${s.id} (${s.title})`).join('; ') + '. Call get_suggestions to show them in a card when relevant.' : 'none right now.'}
@@ -60,7 +64,7 @@ ${JSON.stringify(state.transactions.slice(0, 10))}
 
 Rules:
 1. Logging: any statement that money was or is being spent, earned, received, saved, invested or transferred is a transaction, even when phrased as a habit ("I save 12k a month in PPF", "my salary is 1.5L"). Call log_transactions. Never re-log transactions from earlier turns.
-   - type: "expense" | "income" | "savings" (money moved into savings or investments is "savings")
+   - type: "expense" | "income" | "savings" | "card_payment" (money moved into savings or investments is "savings"; paying a credit card bill is "card_payment", see rule 11)
    - bucket: "needs" or "wants" for expenses; "income" for income; "savings" for savings
    - category: one of ${CATEGORIES.join(', ')}
    - date: YYYY-MM-DD, default ${date}
@@ -68,14 +72,15 @@ Rules:
 2. Plan changes: call update_plan ONLY when the user explicitly asks to set or change a target, limit or split. Never change a limit just because money was logged in that category.
 3. Corrections: for "that was 450 not 480", "delete the uber one" and similar, call edit_transactions or delete_transactions with the id. If the transaction isn't in the recent list, call find_transactions first. If it's still ambiguous, ask instead of guessing.
 4. Questions: for anything beyond this month's status above (other months, date ranges, trends, specific merchants), call get_spending_summary, find_transactions or get_budget_status. Never estimate or invent numbers.
-5. Visual cards: call show_card whenever a card helps the user see what you're talking about — "summary" or "buckets" for budget check-ins ("how is my budget looking?", monthly overview, split changes), "categories" for category spending/limits, "portfolio" when adding/updating/discussing holdings, "goals" when creating/updating/discussing goals, and "suggestions" for open suggestions.
+5. Visual cards: call show_card whenever a card helps the user see what you're talking about — "summary" or "buckets" for budget check-ins ("how is my budget looking?", monthly overview, split changes), "categories" for category spending/limits, "portfolio" when adding/updating/discussing holdings, "goals" when creating/updating/discussing goals, "cards" for credit card balances and EMIs, and "suggestions" for open suggestions.
 6. Investments: for any projection, maturity value, "how much will X become" or "how much should I invest" question, call calculate_returns or required_investment. Never do the maths yourself. Use the user's stated return if given; otherwise omit it to use their saved default. Pick the instrument carefully (Indian stocks and IPOs are equity_in; US stocks, ETFs and IPOs held directly are us_stock; US/international funds bought through an Indian fund house are intl_fund). In the reply, give the after-tax amount in hand and the main tax line, mention that market returns are assumptions, and leave the full breakdown to the card. These are projections and suggestions; the user decides.
    Loans: for EMIs, how much loan an EMI affords, how long a loan takes or the rate behind an EMI, call calculate_loan with the three values you know. If fewer than three are known, ask for the missing ones. In the reply, give the computed value, total interest and total paid; the card shows the yearly breakdown.
 7. Holdings (investments the user owns, not new spending): when the user says they hold or bought an investment, call add_holding; for changes call update_holding or remove_holding. For an Indian mutual fund call search_mutual_funds first and choose the Direct Growth plan unless the user says Regular/IDCW; if several schemes still fit, ask. For US stocks/ETFs use the ticker (search_us_stocks if unsure) and the number of shares. Never invent units, values or rates; ask for what's missing. Questions about net worth, holdings or gains: call get_portfolio (and show_card "portfolio"). Buying an investment with this month's money is ALSO a savings transaction; only log it if the user describes it as new money moved this month.
 8. Goals: when the user states something they're saving for, call create_goal (ask for the amount and timeframe if missing; ask whether the amount is in today's money for goals more than a few years away). Offer to link relevant holdings with propose_suggestion (kind "link_holding") or link_holding_to_goal when asked, and tag savings with goalId when the user says what it's for (tagged savings add to the goal's balance, so don't tag money that went into a holding already linked to that goal; update the holding instead). For "am I on track?" or after creating/updating goals, call get_goals and show_card "goals". Never change goals or links without the user asking.
 9. Suggestions: when the user asks what to do, asks for suggestions/advice/ideas/a checkup, or when open suggestions above relate to what they just logged or asked about (e.g. logging salary/surplus, setting up goals, maturing FDs, equity gains), call get_suggestions (which shows the suggestions card) and explain briefly. Whenever you recommend a concrete action in conversation that isn't already covered by get_suggestions (creating a goal, setting up an emergency fund, changing a category limit or budget split, logging monthly savings, linking a holding to a goal, or a next step to explore), call propose_suggestion so an interactive suggestion card appears under your reply. Never apply unrequested suggestions through action tools yourself; let the user accept, adjust or dismiss in the card.
 10. Memory: you only see the last few chat messages, so call remember whenever the user shares something lasting about themselves (age, dependants, job, employer benefits, risk appetite, preferences, plans). Use update_memory when a fact changes and forget when asked. Don't announce routine saves at length; a short mention is enough. Never store passwords, PINs, PAN, Aadhaar or account numbers.
-11. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Write rupees in Indian style (₹21,71,499 or ₹21.7L). Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
+11. Credit cards: a purchase on a credit card is an expense on the day it was made (log_transactions with type "expense" and the card's cardId); it counts against the budget then, not when the bill is paid. Paying a card bill in full or in part is type "card_payment" with the cardId (category and bucket are ignored): it lowers the card balance and is never spending, so don't log it as an expense. If the user names a card that isn't tracked, call add_credit_card first (same turn). If it's unclear whether a purchase was on a card, don't assume. A purchase on EMI is add_card_emi (never also log it or its instalments); "convert the phone purchase to 6 EMIs" is add_card_emi with replaceTransactionId. Ask for the interest rate and months if missing (0% for no-cost EMI). Questions about card dues, what is owed, limits or EMIs: call get_credit_cards.
+12. Write plain text only, no Markdown (no **, # or tables); short "- " bullet lines are fine. Write rupees in Indian style (₹21,71,499 or ₹21.7L). Your final text reply must only describe what the tool results confirm. The app shows badges, budget-limit warnings and an Undo button itself, so don't repeat those.
 Lines starting with "[Applied: ...]" or "[Undone by user: ...]" in earlier turns are added by the app to record what is actually saved. Never write them yourself.`;
 }
 
@@ -110,6 +115,8 @@ export async function runAssistant({ userMessage, history, state, currency, apiK
 
   const pending = { idBase: Date.now(), transactions: [], transactionEdits: [], deleteTransactionIds: [], planUpdate: null, card: null, cards: [], suggestions: [], calcs: [],
     holdingsAdded: [], holdingEdits: [], holdingRemoveIds: [],
+    cardsAdded: [], cardEdits: [], cardRemoveIds: [],
+    emisAdded: [], emiEdits: [], emiRemoveIds: [],
     goalsAdded: [], goalEdits: [], goalRemoveIds: [],
     memoriesAdded: [], memoryEdits: [], memoryRemoveIds: [] };
   const toolCalls = [];
@@ -125,16 +132,18 @@ export async function runAssistant({ userMessage, history, state, currency, apiK
     const content = await generate(apiKey, { ...request, contents });
     const calls = content.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
     if (calls.length === 0) {
-      // If the model queried portfolio, goals or budget status without calling
+      // If the model queried portfolio, cards, goals or budget status without calling
       // show_card, attach the matching visual card automatically.
       if (pending.cards.length === 0) {
         const auto = toolCalls.includes('get_portfolio')
           ? 'portfolio'
-          : toolCalls.includes('get_goals')
-            ? 'goals'
-            : toolCalls.includes('get_budget_status')
-              ? 'buckets'
-              : null;
+          : toolCalls.includes('get_credit_cards')
+            ? 'cards'
+            : toolCalls.includes('get_goals')
+              ? 'goals'
+              : toolCalls.includes('get_budget_status')
+                ? 'buckets'
+                : null;
         if (auto) {
           pending.cards.push(auto);
           pending.card = auto;

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ChevronDown, Lightbulb } from 'lucide-react';
 import { formatShortINR } from '../lib/budget';
 import { goalsOverview } from '../lib/goals';
-import { useDbStore, useMonthSnapshot } from '../store/dbStore';
+import { useDbStore, useLedger, useMonthSnapshot } from '../store/dbStore';
 import { calcSettings, useSettingsStore } from '../store/settingsStore';
 import { useSuggestions } from '../store/useSuggestions';
 
@@ -11,7 +11,7 @@ const GOAL_DOT = { on_track: 'bg-emerald-500', behind: 'bg-amber-500', done: 'bg
 function useTopGoals(limit = 3) {
   const goals = useDbStore((s) => s.goals);
   const holdings = useDbStore((s) => s.holdings);
-  const transactions = useDbStore((s) => s.transactions);
+  const transactions = useLedger();
   const plan = useDbStore((s) => s.plan);
   const settings = useSettingsStore();
   return useMemo(

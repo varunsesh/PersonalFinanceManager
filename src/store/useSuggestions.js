@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 import { buildSuggestions } from '../lib/suggestions';
-import { useDbStore } from './dbStore';
+import { useDbStore, useLedger } from './dbStore';
 import { calcSettings, useSettingsStore } from './settingsStore';
 
 // Current suggestions, recomputed whenever the underlying data changes.
 export function useSuggestions() {
-  const transactions = useDbStore((s) => s.transactions);
+  const transactions = useLedger();
   const plan = useDbStore((s) => s.plan);
   const holdings = useDbStore((s) => s.holdings);
   const goals = useDbStore((s) => s.goals);

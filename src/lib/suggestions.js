@@ -47,7 +47,7 @@ function surplusSplit({ transactions, plan, overview }) {
     if (!t.date.startsWith(month)) return;
     if (t.type === 'income') income += t.amount;
     else if (t.type === 'expense') expenses += t.amount;
-    else saved += t.amount;
+    else if (t.type === 'savings') saved += t.amount;
   });
   const base = income > 0 ? income : plan.monthlyIncomeTarget;
   const target = (base * plan.ratios.savings) / 100;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BarChart3, PieChart as PieChartIcon } from 'lucide-react';
 import AllocationBarChart from '../components/AllocationBarChart';
+import CardsSection from '../components/CardsSection';
 import DataControls from '../components/DataControls';
 import DonutChart from '../components/DonutChart';
 import GoalsSection from '../components/GoalsSection';
@@ -12,7 +13,8 @@ import { useBudgetMetrics, useDbStore } from '../store/dbStore';
 const TABS = [
   ['month', 'This month'],
   ['goals', 'Goals'],
-  ['investments', 'Investments']
+  ['investments', 'Investments'],
+  ['cards', 'Cards']
 ];
 
 const monthLabel = (month) =>
@@ -52,7 +54,7 @@ function ThisMonth({ ledgerTab, targetSeq }) {
   );
 }
 
-// The Plan view: this month's budget, goals and investments.
+// The Plan view: this month's budget, goals, investments and credit cards.
 export default function Dashboard({ target }) {
   const [tab, setTab] = useState(target?.tab || 'month');
 
@@ -63,7 +65,7 @@ export default function Dashboard({ target }) {
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-5xl w-full mx-auto p-3 sm:p-4 space-y-4 pb-10">
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-200/60 p-1">
+        <div className="grid grid-cols-4 gap-1 rounded-xl bg-slate-200/60 p-1">
           {TABS.map(([key, label]) => (
             <button
               key={key}
@@ -80,6 +82,7 @@ export default function Dashboard({ target }) {
         {tab === 'month' && <ThisMonth ledgerTab={target?.ledgerTab} targetSeq={target?.seq} />}
         {tab === 'goals' && <GoalsSection />}
         {tab === 'investments' && <PortfolioSection />}
+        {tab === 'cards' && <CardsSection />}
       </div>
     </main>
   );

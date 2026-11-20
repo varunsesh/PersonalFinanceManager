@@ -3,6 +3,7 @@ import AllocationBarChart from './AllocationBarChart';
 import { AllocationBar, GainText, PortfolioHeadline } from './PortfolioSummary';
 import { formatShortINR } from '../lib/budget';
 import GoalList from './GoalList';
+import CreditCardList from './CreditCardList';
 import SuggestionCard from './SuggestionCard';
 import { useSuggestions } from '../store/useSuggestions';
 
@@ -127,6 +128,27 @@ export default function ChatCard({ card, onAsk, onOpenDashboard }) {
   if (card.type === 'suggestions') return <LiveSuggestions proposed={card.suggestions} onAsk={onAsk} />;
   if (card.type === 'portfolio') {
     return <PortfolioCard data={card.data} onOpen={onOpenDashboard ? () => onOpenDashboard({ tab: 'investments' }) : undefined} />;
+  }
+  if (card.type === 'cards') {
+    const onOpen = onOpenDashboard ? () => onOpenDashboard({ tab: 'cards' }) : undefined;
+    const Tag = onOpen ? 'button' : 'div';
+    return (
+      <Tag
+        {...(onOpen ? { type: 'button', onClick: onOpen } : {})}
+        className={`block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm ${
+          onOpen ? 'cursor-pointer transition-colors hover:border-indigo-300' : ''
+        }`}
+      >
+        <div className="flex items-center justify-between pt-1 text-[11px] font-semibold text-slate-500">
+          <span>Credit cards</span>
+          <span className="font-medium text-slate-400">
+            Owed {formatShortINR(card.data.totalOwed)}
+            {onOpen && <span className="ml-2 font-semibold text-indigo-600">Open →</span>}
+          </span>
+        </div>
+        {card.data.cards.length ? <CreditCardList overview={card.data} /> : <div className="py-3 text-xs text-slate-400">No cards yet.</div>}
+      </Tag>
+    );
   }
   if (card.type === 'goals') {
     const onOpen = onOpenDashboard ? () => onOpenDashboard({ tab: 'goals' }) : undefined;

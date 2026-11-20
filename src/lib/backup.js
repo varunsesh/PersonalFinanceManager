@@ -25,6 +25,8 @@ export function buildBackup() {
       holdings: db.holdings,
       goals: db.goals ?? [],
       memories: db.memories ?? [],
+      creditCards: db.creditCards ?? [],
+      cardEmis: db.cardEmis ?? [],
       suggestionState: db.suggestionState,
       messages: useChatStore.getState().messages,
       settings
@@ -70,7 +72,7 @@ export function parseBackup(text) {
   if (parsed?.app !== APP || !isObj(parsed.data)) throw new Error("This isn't a FinChat backup file.");
   if (parsed.version > VERSION) throw new Error('This backup is from a newer version of FinChat. Update the app first.');
   const d = parsed.data;
-  for (const key of ['transactions', 'holdings', 'goals', 'memories', 'messages']) {
+  for (const key of ['transactions', 'holdings', 'goals', 'memories', 'creditCards', 'cardEmis', 'messages']) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(`The backup's ${key} are damaged.`);
   }
   if (!isObj(d.plan) || !isObj(d.plan.ratios) || !isObj(d.plan.categoryLimits)) throw new Error("The backup's budget plan is damaged.");
@@ -82,6 +84,7 @@ export function parseBackup(text) {
       holdings: d.holdings?.length ?? 0,
       goals: d.goals?.length ?? 0,
       memories: d.memories?.length ?? 0,
+      creditCards: d.creditCards?.length ?? 0,
       messages: d.messages?.length ?? 0
     }
   };
@@ -97,6 +100,8 @@ export function restoreBackup(backup) {
     holdings: d.holdings ?? [],
     goals: d.goals ?? [],
     memories: d.memories ?? [],
+    creditCards: d.creditCards ?? [],
+    cardEmis: d.cardEmis ?? [],
     suggestionState: d.suggestionState ?? { dismissed: {}, accepted: {} },
     priceErrors: []
   });

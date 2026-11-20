@@ -2,17 +2,22 @@ import { CATEGORIES } from './constants';
 import { CARD_TYPES, applyPlanUpdate, normalizeTransaction } from './validation';
 import { currentValue, portfolioSummary } from './portfolio';
 import { goalsOverview } from './goals';
+import { cardOverview, ledger } from './credit';
 import { calcSettings, DEFAULT_SETTINGS } from '../store/settingsStore';
 
-const describe = (tx, fmt) => `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})`;
+const describe = (tx, fmt, cards = []) => {
+  const card = tx.cardId && cards.find((c) => c.id === tx.cardId)?.name;
+  if (tx.type === 'card_payment') return `Paid ${fmt(tx.amount)} to ${card ?? 'card'}`;
+  return `${tx.type === 'income' ? '+' : '-'}${fmt(tx.amount)} (${tx.category})${card ? ` on ${card}` : ''}`;
+};
 
 // Turn a validated Gemini result into the next budget state, plus a record of
 // exactly what changed so the reply can be undone later. New ids derive from
 // result.idBase so repeated runs over the same result produce the same ids.
 //   changes = { added: [tx], edited: [{ before, after }], deleted: [tx], plan: { before, after } | null,
 //               holdings: { added, edited, removed }, goals: { added, edited, removed },
-//               memories: { added, edited, removed } }
-export function applyAssistantResult(result, { transactions, plan, holdings = [], goals = [], memories = [] }, fmt) {
+//               memories: { added, edited, removed }, creditCards: { ... }, cardEmis: { ... } }
+export function applyAssistantResult(result, { transactions, plan, holdings = [], goals = [], memories = [], creditCards = [], cardEmis = [] }, fmt) {
   const badges = [];
   const skipped = [];
   const changes = {
@@ -22,7 +27,43 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
     plan: null,
     holdings: emptyRecord(),
     goals: emptyRecord(),
-    memories: emptyRecord()
+    memories: emptyRecord(),
+    creditCards: emptyRecord(),
+    cardEmis: emptyRecord()
+  };
+
+  // Cards and EMI plans first, so transactions can name cards added this turn.
+  const nextCards = applyCollection(
+    creditCards,
+    { added: result.cardsAdded, edits: result.cardEdits, removeIds: result.cardRemoveIds },
+    changes.creditCards,
+    badges,
+    { added: (c) => `New card: ${c.name}`, edited: (c) => `Updated card ${c.name}`, removed: (c) => `Removed card ${c.name}` }
+  );
+  const cardName = (id) => nextCards.find((c) => c.id === id)?.name ?? 'card';
+  const nextEmis = applyCollection(
+    cardEmis,
+    { added: result.emisAdded, edits: result.emiEdits, removeIds: result.emiRemoveIds },
+    changes.cardEmis,
+    badges,
+    {
+      added: (e) => `EMI: ${e.description} ${fmt(e.principal)} × ${e.months} months on ${cardName(e.cardId)}`,
+      edited: (e) => `Updated EMI ${e.description}`,
+      removed: (e) => `Removed EMI ${e.description}`
+    }
+  );
+  const cardIds = new Set(nextCards.map((c) => c.id));
+  // Expenses on an unknown card keep the expense but lose the card; a payment
+  // to an unknown card is dropped (returns null).
+  const checkCard = (t, label) => {
+    if (!t.cardId || cardIds.has(t.cardId)) return t;
+    if (t.type === 'card_payment') {
+      skipped.push(`${label} wasn't saved (unknown card ${t.cardId})`);
+      return null;
+    }
+    skipped.push(`${label} wasn't linked to a card (unknown card ${t.cardId})`);
+    const { cardId, ...rest } = t;
+    return rest;
   };
 
   // Goals first, so transactions can be tagged with goals created this turn.
@@ -56,7 +97,7 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
     }
     deleteIds.add(id);
     changes.deleted.push(tx);
-    badges.push(`Deleted ${describe(tx, fmt)}`);
+    badges.push(`Deleted ${describe(tx, fmt, nextCards)}`);
   });
 
   const edits = new Map();
@@ -74,7 +115,8 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
       skipped.push(`edit to "${before.description}" had an invalid amount or type`);
       return;
     }
-    const after = checkGoal({ ...normalized, id: before.id }, `"${normalized.description}"`);
+    const after = checkCard(checkGoal({ ...normalized, id: before.id }, `"${normalized.description}"`), `"${normalized.description}"`);
+    if (!after) return;
     edits.set(before.id, after);
     changes.edited.push({ before, after });
     badges.push(
@@ -96,10 +138,11 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
       skipped.push(`transaction "${raw?.description ?? 'unknown'}" had an invalid amount or type`);
       return;
     }
-    const tx = checkGoal({ id: `tx-${result.idBase ?? Date.now()}-${idx}`, ...t }, `"${t.description}"`);
+    const tx = checkCard(checkGoal({ id: `tx-${result.idBase ?? Date.now()}-${idx}`, ...t }, `"${t.description}"`), `"${t.description}"`);
+    if (!tx) return;
     changes.added.push(tx);
     const goal = tx.goalId && nextGoals.find((g) => g.id === tx.goalId);
-    badges.push(goal ? `${describe(tx, fmt)} → ${goal.name}` : describe(tx, fmt));
+    badges.push(goal ? `${describe(tx, fmt, nextCards)} → ${goal.name}` : describe(tx, fmt, nextCards));
   });
   if (changes.added.length > 0) nextTransactions = [...changes.added, ...nextTransactions];
 
@@ -140,13 +183,17 @@ export function applyAssistantResult(result, { transactions, plan, holdings = []
     changes.plan !== null ||
     recordSize(changes.holdings) > 0 ||
     recordSize(changes.goals) > 0 ||
-    recordSize(changes.memories) > 0;
+    recordSize(changes.memories) > 0 ||
+    recordSize(changes.creditCards) > 0 ||
+    recordSize(changes.cardEmis) > 0;
   return {
     transactions: nextTransactions,
     plan: nextPlan,
     holdings: nextHoldings,
     goals: nextGoals,
     memories: nextMemories,
+    creditCards: nextCards,
+    cardEmis: nextEmis,
     badges,
     skipped,
     changes: changed ? changes : null
@@ -207,7 +254,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Reverse a recorded set of changes against the *current* state. Anything the
 // user has changed again since then is left alone.
-export function undoChanges(changes, { transactions, plan, holdings = [], goals = [], memories = [] }) {
+export function undoChanges(changes, { transactions, plan, holdings = [], goals = [], memories = [], creditCards = [], cardEmis = [] }) {
   const addedIds = new Set(changes.added.map((t) => t.id));
   const editedBefore = new Map(changes.edited.map(({ before, after }) => [after.id, { before, after }]));
 
@@ -241,7 +288,9 @@ export function undoChanges(changes, { transactions, plan, holdings = [], goals 
     plan: nextPlan,
     holdings: undoCollection(holdings, changes.holdings, PRICE_KEYS),
     goals: undoCollection(goals, changes.goals),
-    memories: undoCollection(memories, changes.memories)
+    memories: undoCollection(memories, changes.memories),
+    creditCards: undoCollection(creditCards, changes.creditCards),
+    cardEmis: undoCollection(cardEmis, changes.cardEmis)
   };
 }
 
@@ -277,15 +326,16 @@ export function budgetAlerts(before, after, plan, fmt) {
 
 // Data for an inline chat card, captured when the reply is made so the card
 // keeps showing what the reply talked about.
-export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], planning = DEFAULT_SETTINGS, suggestions = [] } = {}) {
+export function buildCard(type, metrics, plan, { holdings = [], goals = [], transactions = [], creditCards = [], cardEmis = [], planning = DEFAULT_SETTINGS, suggestions = [] } = {}) {
   if (!CARD_TYPES.includes(type) || type === 'none') return null;
+  if (type === 'cards') return { type, month: metrics.month, data: cardOverview({ creditCards, transactions, cardEmis }) };
   // Suggestions are rendered live (they change as the user accepts or dismisses them),
   // alongside any conversation-specific suggestions proposed in this reply.
   if (type === 'suggestions') return { type, month: metrics.month, ...(suggestions.length > 0 ? { suggestions } : {}) };
   if (type === 'goals') {
     const overview = goalsOverview(goals, {
       holdings,
-      transactions,
+      transactions: ledger(transactions, cardEmis),
       plan,
       settings: { calc: calcSettings(planning), defaultReturns: planning.defaultReturns ?? DEFAULT_SETTINGS.defaultReturns }
     });

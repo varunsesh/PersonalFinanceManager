@@ -5,6 +5,7 @@ import { computeMetrics, formatMoney } from '../lib/budget';
 import { applyAssistantResult, budgetAlerts, buildCards, undoChanges } from '../lib/assistantActions';
 import { runAssistant, toGeminiHistory } from '../lib/gemini';
 import { suggestionToResult } from '../lib/suggestions';
+import { ledgerOf } from '../lib/credit';
 import { createIdbStorage } from './idbStorage';
 import { useDbStore } from './dbStore';
 import { calcSettings, useSettingsStore } from './settingsStore';
@@ -13,6 +14,7 @@ import { calcSettings, useSettingsStore } from './settingsStore';
 // parsed changes straight into dbStore, so every view subscribed to dbStore
 // updates as soon as the reply is applied. Each assistant message keeps a
 // record of what it changed (`changes`) so it can be undone.
+const metricsOf = (state) => computeMetrics(ledgerOf(state), state.plan);
 let msgSeq = 0;
 const nextMsgId = () => `msg-${Date.now()}-${++msgSeq}`;
 
@@ -37,12 +39,13 @@ export const useChatStore = create(
         try {
           // Refresh stale holding prices first so answers use today's values
           await useDbStore.getState().refreshPrices().catch(() => {});
-          const { plan, transactions, holdings, goals, memories, suggestionState, currency, apiKey } = useDbStore.getState();
+          const { plan, transactions, holdings, goals, memories, creditCards, cardEmis, suggestionState, currency, apiKey } =
+            useDbStore.getState();
           const planning = useSettingsStore.getState();
           const result = await runAssistant({
             userMessage: text,
             history,
-            state: { transactions, plan, holdings, goals, memories, suggestionState },
+            state: { transactions, plan, holdings, goals, memories, creditCards, cardEmis, suggestionState },
             currency,
             apiKey,
             fmt: (v) => formatMoney(v, currency),
@@ -53,8 +56,8 @@ export const useChatStore = create(
           const db = useDbStore.getState();
           const fmt = (v) => formatMoney(v, db.currency);
           const applied = applyAssistantResult(result, db, fmt);
-          const before = computeMetrics(db.transactions, db.plan);
-          const after = computeMetrics(applied.transactions, applied.plan);
+          const before = metricsOf(db);
+          const after = metricsOf(applied);
           if (applied.changes) db.applyBudget(applied);
 
           const reply = typeof result.reply === 'string' && result.reply.trim() ? result.reply : 'Done.';
@@ -63,6 +66,8 @@ export const useChatStore = create(
             holdings: applied.holdings,
             goals: applied.goals,
             transactions: applied.transactions,
+            creditCards: applied.creditCards,
+            cardEmis: applied.cardEmis,
             planning,
             suggestions: result.suggestions ?? []
           });
@@ -105,7 +110,7 @@ export const useChatStore = create(
         const fmt = (v) => formatMoney(v, db.currency);
         const applied = applyAssistantResult(result, db, fmt);
         if (!applied.changes) return false;
-        const before = computeMetrics(db.transactions, db.plan);
+        const before = metricsOf(db);
         db.applyBudget(applied);
         db.setSuggestionOutcome(suggestion.id, 'accepted');
         const msg = {
@@ -115,7 +120,7 @@ export const useChatStore = create(
           text: `Done: ${suggestion.title}.`,
           badges: applied.badges,
           changes: applied.changes,
-          alerts: budgetAlerts(before, computeMetrics(applied.transactions, applied.plan), applied.plan, fmt),
+          alerts: budgetAlerts(before, metricsOf(applied), applied.plan, fmt),
           suggestionId: suggestion.id
         };
         set((s) => ({ messages: [...s.messages, msg], hasNewUpdates: true }));

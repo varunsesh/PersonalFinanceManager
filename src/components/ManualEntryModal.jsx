@@ -9,33 +9,38 @@ const emptyForm = () => ({
   type: 'expense',
   bucket: 'needs',
   category: 'Groceries',
-  date: today()
+  date: today(),
+  cardId: ''
 });
 
 export default function ManualEntryModal({ onClose }) {
   const currency = useDbStore((s) => s.currency);
   const addTransactions = useDbStore((s) => s.addTransactions);
+  const creditCards = useDbStore((s) => s.creditCards);
   const [form, setForm] = useState(emptyForm);
+  const isPayment = form.type === 'card_payment';
 
   const handleSubmit = (e) => {
     e.preventDefault();
     const amt = parseFloat(form.amount);
     if (!form.description.trim() || isNaN(amt) || amt <= 0) return;
+    if (isPayment && !form.cardId) return;
 
-    const bucket =
-      form.type === 'income' ? 'income' : form.type === 'savings' ? 'savings' : form.bucket;
-
-    addTransactions([
-      {
-        id: `tx-${Date.now()}`,
-        date: form.date || today(),
-        description: form.description.trim(),
-        amount: amt,
-        type: form.type,
-        bucket,
-        category: form.category
-      }
-    ]);
+    const base = { id: `tx-${Date.now()}`, date: form.date || today(), description: form.description.trim(), amount: amt };
+    if (isPayment) {
+      addTransactions([{ ...base, type: 'card_payment', bucket: 'transfer', category: 'Other', cardId: form.cardId }]);
+    } else {
+      const bucket = form.type === 'income' ? 'income' : form.type === 'savings' ? 'savings' : form.bucket;
+      addTransactions([
+        {
+          ...base,
+          type: form.type,
+          bucket,
+          category: form.category,
+          ...(form.type === 'expense' && form.cardId && { cardId: form.cardId })
+        }
+      ]);
+    }
     onClose();
   };
 
@@ -97,21 +102,55 @@ export default function ManualEntryModal({ onClose }) {
                 <option value="expense">Expense</option>
                 <option value="income">Income</option>
                 <option value="savings">Savings</option>
+                {creditCards.length > 0 && <option value="card_payment">Card bill payment</option>}
               </select>
             </div>
+            {isPayment ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Card</label>
+                <select
+                  required
+                  value={form.cardId}
+                  onChange={(e) => setForm({ ...form, cardId: e.target.value })}
+                  className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2 bg-white"
+                >
+                  <option value="">Choose…</option>
+                  {creditCards.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Category</label>
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2 bg-white"
+                >
+                  {CATEGORIES.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {form.type === 'expense' && creditCards.length > 0 && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Category</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Paid with</label>
               <select
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                value={form.cardId}
+                onChange={(e) => setForm({ ...form, cardId: e.target.value })}
                 className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2 bg-white"
               >
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                <option value="">Cash / UPI / debit card</option>
+                {creditCards.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name} (credit card)</option>
                 ))}
               </select>
             </div>
-          </div>
+          )}
 
           {form.type === 'expense' && (
             <div>

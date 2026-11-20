@@ -19,6 +19,7 @@ Built with React, Vite, Tailwind CSS and zustand, and packaged as an Android app
 **Planning**
 - **After-tax projections:** "2L in an FD at 7.25% for 3 years", "15k SIP in Parag Parikh for 10 years", "$5,000 in VOO for 8 years", "10k/month in NPS till 60". Cards show the tax breakdown, post-tax return, value in today's money, a range at ±2%, and sliders for return and years.
 - **Loans and EMIs:** "EMI on a 50L home loan at 8.5% for 20 years", "how much can I borrow with a 40k EMI?", "how long to repay 8L at 15k a month?". Give any three of amount, rate, tenure and EMI and the fourth is worked out, with total interest, a principal/interest bar, a year-by-year table and sliders.
+- **Credit cards:** "track my HDFC Regalia, limit 3L, due on the 5th", "1,200 dinner on Regalia", "paid 25k Regalia bill", "bought a 60k phone on Regalia, 6 EMIs at 15%" or "convert the phone purchase to 6 EMIs". Card spends count against the budget on the day you make them; lump-sum bill payments only lower the card balance and are never counted as spending again. An EMI purchase counts one instalment (principal + interest) per month, plus any processing fee in the purchase month, so a large purchase is spread over its tenure. Each card shows its balance, EMI principal still to be billed, limit used, next due date and active EMIs.
 - **Required investment:** "how much monthly to have ₹50L in today's money in 12 years?"
 - **Investments you own:** mutual funds (Indian and international), US stocks/ETFs, FDs, PPF, NPS and Indian stocks/IPOs, added and updated by chat. Values update from live prices; "what's my net worth?" shows allocation, gains and tax if sold today.
 - **Goals:** "₹20L for a car in 3 years", an emergency fund sized from your spending, targets in today's money. Fund them with linked investments (whole or a share), savings tagged to the goal and money held elsewhere; see progress, the after-tax monthly amount needed, your actual pace and whether you're on track.
@@ -30,11 +31,12 @@ Built with React, Vite, Tailwind CSS and zustand, and packaged as an Android app
 - **This month:** KPIs with change vs last month, 50/30/20 plan vs. actual, spending by category, category limits with month-on-month change, and the transaction list.
 - **Goals:** every goal with progress ring, status and monthly need vs. pace.
 - **Investments:** net worth, allocation, each holding with value and gain, tax if sold today, and a price refresh.
+- **Cards:** each credit card's balance, limit use, this month's spend and payments, and EMI progress.
 - Searchable transaction list (all months) and editable category limits.
 - Manual entry and reset to sample data.
 
 **Backups**
-- One file with everything (transactions, plan, investments, goals, remembered facts, chat, settings; never API keys), saved through Android's share sheet to Drive, Files or email. Restore shows what the file contains and replaces data only after you confirm.
+- One file with everything (transactions, plan, investments, goals, credit cards and EMIs, remembered facts, chat, settings; never API keys), saved through Android's share sheet to Drive, Files or email. Restore shows what the file contains and replaces data only after you confirm.
 
 ## How the assistant works
 
@@ -42,10 +44,10 @@ Each message runs a [Gemini function-calling](https://ai.google.dev/gemini-api/d
 
 | Tool | Kind | What it does |
 | --- | --- | --- |
-| `get_spending_summary` | query | Totals for a date range, filtered and grouped by category, bucket, month or type |
+| `get_spending_summary` | query | Totals for a date range, filtered and grouped by category, bucket, month or type (card bill payments are reported separately) |
 | `find_transactions` | query | Search by text, date, category, type or amount (returns ids) |
 | `get_budget_status` | query | A month's plan, bucket targets and category limits vs. actuals |
-| `log_transactions` | action | Add new transactions |
+| `log_transactions` | action | Add new transactions, including card spends (`cardId`) and card bill payments (`card_payment`) |
 | `edit_transactions` | action | Correct transactions by id |
 | `delete_transactions` | action | Remove transactions by id |
 | `update_plan` | action | Change the income target, split or category limits |
@@ -61,9 +63,12 @@ Each message runs a [Gemini function-calling](https://ai.google.dev/gemini-api/d
 | `create_goal` / `update_goal` / `delete_goal` | action | Manage goals (emergency funds size themselves) |
 | `link_holding_to_goal` | action | Earmark a holding, or a share of it, for a goal |
 | `get_goals` | query | Progress, monthly need, pace and status for every goal |
+| `add_credit_card` / `update_credit_card` / `remove_credit_card` | action | Manage tracked credit cards (limit, due day, opening balance) |
+| `add_card_emi` / `update_card_emi` / `remove_card_emi` | action | Record a purchase on EMI (or convert a logged purchase); instalments count month by month |
+| `get_credit_cards` | query | Balance, EMI principal left, total owed, available limit, this month's activity and EMIs per card |
 | `get_suggestions` | query | The app's current suggestions (the user accepts them in a card) |
 | `remember` / `update_memory` / `forget` | action | Keep lasting facts about the user across conversations |
-| `show_card` | action | Attach a summary, buckets, categories, portfolio, goals or suggestions card to the reply |
+| `show_card` | action | Attach a summary, buckets, categories, portfolio, goals, cards or suggestions card to the reply |
 
 Query tools run locally, and only their results are sent back to Gemini. Action tools are validated (amounts, types, categories, dates, ids) and reported back to the model, so its reply only describes changes that were accepted. The app then applies them in one step and records them for Undo.
 
@@ -159,6 +164,7 @@ src/
     validation.js       # Checks transactions and plan updates proposed by the model
     portfolio.js        # Holdings: creation, valuation, price refresh, exit-tax estimate
     goals.js            # Goal balance, target, monthly need, pace and status
+    credit.js           # Credit cards: EMI schedules, the ledger with instalments, card balances
     suggestions.js      # Suggestion rules and how an accepted one changes data
     memory.js           # Validation for remembered facts
     backup.js           # Backup file export, validation and restore

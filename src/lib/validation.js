@@ -2,8 +2,9 @@ import { CATEGORIES, today } from './constants';
 
 // Validation for anything the model proposes, before it touches stored data.
 const RATIO_KEYS = ['needs', 'wants', 'savings'];
-export const TX_TYPES = ['expense', 'income', 'savings'];
-export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio', 'goals', 'suggestions'];
+// card_payment: a lump-sum credit card bill payment (a transfer, not spending)
+export const TX_TYPES = ['expense', 'income', 'savings', 'card_payment'];
+export const CARD_TYPES = ['none', 'summary', 'buckets', 'categories', 'portfolio', 'goals', 'suggestions', 'cards'];
 
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -15,11 +16,26 @@ export function isValidDate(s) {
 
 // Coerce one model-produced transaction into a consistent shape. `type` is the
 // source of truth: income/savings always map to their own bucket, and expenses
-// can only be needs or wants. Returns null if the entry is unusable.
+// can only be needs or wants. Expenses may carry the cardId they were paid
+// with; card payments must name the card they pay off. Returns null if the
+// entry is unusable.
 export function normalizeTransaction(t) {
   const amount = Math.abs(Number(t?.amount));
   if (!Number.isFinite(amount) || amount === 0) return null;
   if (!TX_TYPES.includes(t.type)) return null;
+  const cardId = typeof t.cardId === 'string' && t.cardId ? t.cardId : null;
+  if (t.type === 'card_payment') {
+    if (!cardId) return null;
+    return {
+      description: String(t.description || '').trim() || 'Credit card bill payment',
+      amount,
+      type: 'card_payment',
+      bucket: 'transfer',
+      category: 'Other',
+      date: isValidDate(t.date) ? t.date : today(),
+      cardId
+    };
+  }
   const bucket = t.type === 'expense' ? (t.bucket === 'wants' ? 'wants' : 'needs') : t.type;
   const category = CATEGORIES.includes(t.category) ? t.category : 'Other';
   return {
@@ -29,8 +45,67 @@ export function normalizeTransaction(t) {
     bucket,
     category,
     date: isValidDate(t.date) ? t.date : today(),
-    ...(typeof t.goalId === 'string' && t.goalId ? { goalId: t.goalId } : {})
+    ...(typeof t.goalId === 'string' && t.goalId ? { goalId: t.goalId } : {}),
+    ...(cardId && t.type === 'expense' ? { cardId } : {})
   };
+}
+
+// Validated credit card fields from tool args (partial for updates).
+export function cardFields(args) {
+  const out = {};
+  if (args.name != null) {
+    const name = String(args.name).trim().slice(0, 40);
+    if (!name) return { error: 'name is required' };
+    out.name = name;
+  }
+  if (args.limit != null) {
+    if (!(isFiniteNumber(args.limit) && args.limit > 0)) return { error: 'limit must be a positive amount' };
+    out.limit = args.limit;
+  }
+  if (args.dueDay != null) {
+    if (!(Number.isInteger(args.dueDay) && args.dueDay >= 1 && args.dueDay <= 31)) return { error: 'dueDay must be 1-31' };
+    out.dueDay = args.dueDay;
+  }
+  if (args.openingBalance != null) {
+    if (!(isFiniteNumber(args.openingBalance) && args.openingBalance >= 0)) return { error: 'openingBalance must be 0 or more' };
+    out.openingBalance = args.openingBalance;
+  }
+  return { fields: out };
+}
+
+// Validated EMI plan fields from tool args, merged onto `prev` for updates.
+// Returns { plan } or { error }.
+export function emiPlanFields(args, prev = {}) {
+  const next = { ...prev };
+  if (args.description != null) next.description = String(args.description).trim().slice(0, 60);
+  if (args.amount != null) next.principal = Number(args.amount);
+  if (args.annualRatePct != null) next.ratePct = Number(args.annualRatePct);
+  if (args.months != null) next.months = Number(args.months);
+  if (args.processingFee != null) next.fee = Number(args.processingFee);
+  if (args.category != null) next.category = CATEGORIES.includes(args.category) ? args.category : 'Other';
+  if (args.bucket != null) next.bucket = args.bucket === 'wants' ? 'wants' : 'needs';
+  if (args.purchaseDate != null) {
+    if (!isValidDate(args.purchaseDate)) return { error: 'purchaseDate must be YYYY-MM-DD' };
+    next.purchaseDate = args.purchaseDate;
+  }
+  if (args.firstEmiDate != null) {
+    if (!isValidDate(args.firstEmiDate)) return { error: 'firstEmiDate must be YYYY-MM-DD' };
+    next.startDate = args.firstEmiDate;
+  }
+  next.purchaseDate ??= today();
+  next.startDate ??= next.purchaseDate;
+  next.fee ??= 0;
+  next.category ??= 'Other';
+  next.bucket ??= 'needs';
+  if (!next.description) return { error: 'description is required' };
+  if (!(isFiniteNumber(next.principal) && next.principal > 0)) return { error: 'amount (the purchase price converted to EMI) must be positive' };
+  next.principal = Math.round(next.principal);
+  if (!(isFiniteNumber(next.ratePct) && next.ratePct >= 0 && next.ratePct <= 50)) return { error: 'annualRatePct must be 0-50 (0 for no-cost EMI)' };
+  if (!(Number.isInteger(next.months) && next.months >= 1 && next.months <= 60)) return { error: 'months must be a whole number from 1 to 60' };
+  if (!(isFiniteNumber(next.fee) && next.fee >= 0)) return { error: 'processingFee must be 0 or more' };
+  next.fee = Math.round(next.fee);
+  if (next.startDate < next.purchaseDate) return { error: 'firstEmiDate cannot be before purchaseDate' };
+  return { plan: next };
 }
 
 // Apply a model-produced plan update to `prev` without mutating it. Partial

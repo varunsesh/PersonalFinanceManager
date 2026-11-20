@@ -2,14 +2,14 @@ import { useMemo } from 'react';
 import { Target, Trash2 } from 'lucide-react';
 import { formatShortINR } from '../lib/budget';
 import { goalsOverview } from '../lib/goals';
-import { useDbStore } from '../store/dbStore';
+import { useDbStore, useLedger } from '../store/dbStore';
 import { calcSettings, useSettingsStore } from '../store/settingsStore';
 import GoalList from './GoalList';
 
 export default function GoalsSection() {
   const goals = useDbStore((s) => s.goals);
   const holdings = useDbStore((s) => s.holdings);
-  const transactions = useDbStore((s) => s.transactions);
+  const transactions = useLedger();
   const plan = useDbStore((s) => s.plan);
   const removeGoal = useDbStore((s) => s.removeGoal);
   const settings = useSettingsStore();

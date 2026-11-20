@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { CATEGORIES } from '../lib/constants';
-import { useDbStore } from '../store/dbStore';
+import { useLedger } from '../store/dbStore';
 import CategoryLimitsTable from './CategoryLimitsTable';
 import TransactionsTable from './TransactionsTable';
 
 export default function LedgerCard({ initialTab = 'transactions', targetSeq }) {
-  const transactions = useDbStore((s) => s.transactions);
+  const transactions = useLedger();
   const [activeTab, setActiveTab] = useState(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
@@ -17,12 +17,15 @@ export default function LedgerCard({ initialTab = 'transactions', targetSeq }) {
 
   const filteredTransactions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return transactions.filter((tx) => {
-      const matchesCat = categoryFilter === 'ALL' || tx.category === categoryFilter;
-      const matchesSearch =
-        !q || tx.description.toLowerCase().includes(q) || tx.category.toLowerCase().includes(q);
-      return matchesCat && matchesSearch;
-    });
+    return transactions
+      .filter((tx) => {
+        const matchesCat = categoryFilter === 'ALL' || tx.category === categoryFilter;
+        const matchesSearch =
+          !q || tx.description.toLowerCase().includes(q) || tx.category.toLowerCase().includes(q);
+        return matchesCat && matchesSearch;
+      })
+      // Newest first; entries on the same day keep the order they were added
+      .sort((a, b) => b.date.localeCompare(a.date));
   }, [transactions, categoryFilter, searchQuery]);
 
   return (

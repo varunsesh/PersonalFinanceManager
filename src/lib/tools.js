@@ -1,6 +1,7 @@
 import { CATEGORIES, today } from './constants';
 import { computeMetrics } from './budget';
-import { CARD_TYPES, TX_TYPES, applyPlanUpdate, isValidDate, normalizeTransaction } from './validation';
+import { CARD_TYPES, TX_TYPES, applyPlanUpdate, cardFields, emiPlanFields, isValidDate, normalizeTransaction } from './validation';
+import { cardOverview, emiSchedule, isCardPayment, ledgerOf } from './credit';
 import { project, projectRange, requiredContribution } from './finance/calculators';
 import { amortize, solveLoan } from './finance/loans';
 import { INSTRUMENTS, TAX_RULES } from './finance/taxRules';
@@ -32,7 +33,31 @@ const TX_FIELDS = {
   bucket: { type: 'STRING', enum: BUCKETS },
   category: { type: 'STRING', enum: CATEGORIES },
   date: DATE,
-  goalId: { type: 'STRING', description: 'Optional: id of the goal this savings is for' }
+  goalId: { type: 'STRING', description: 'Optional: id of the goal this savings is for' },
+  cardId: {
+    type: 'STRING',
+    description: 'Credit card id: for an expense paid by credit card, the card used; for type card_payment, the card whose bill was paid. Empty string removes it.'
+  }
+};
+
+const CARD_FIELDS = {
+  name: { type: 'STRING', description: 'Short name, e.g. "HDFC Regalia"' },
+  limit: { type: 'NUMBER', description: 'Credit limit in rupees' },
+  dueDay: { type: 'INTEGER', description: 'Day of the month the bill is due (1-31)' },
+  openingBalance: { type: 'NUMBER', description: 'Amount already owed on the card (excluding EMIs) when tracking starts' }
+};
+
+const EMI_FIELDS = {
+  cardId: { type: 'STRING' },
+  description: { type: 'STRING', description: 'What was bought, e.g. "iPhone"' },
+  amount: { type: 'NUMBER', description: 'Purchase amount converted to EMI (principal), in rupees' },
+  annualRatePct: { type: 'NUMBER', description: 'Yearly interest rate; 0 for no-cost EMI' },
+  months: { type: 'INTEGER', description: 'Number of instalments' },
+  processingFee: { type: 'NUMBER', description: 'One-time fee in rupees (incl. GST if known), counted in the purchase month' },
+  purchaseDate: DATE,
+  firstEmiDate: { ...DATE, description: 'Date of the first instalment; default the purchase date' },
+  category: { type: 'STRING', enum: CATEGORIES },
+  bucket: { type: 'STRING', enum: ['needs', 'wants'] }
 };
 
 export const TOOL_DECLARATIONS = [
@@ -330,6 +355,47 @@ export const TOOL_DECLARATIONS = [
     parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
   },
   {
+    name: 'add_credit_card',
+    description: 'Start tracking a credit card. Ask for the name if unclear; limit, due day and current outstanding are optional.',
+    parameters: { type: 'OBJECT', properties: CARD_FIELDS, required: ['name'] }
+  },
+  {
+    name: 'update_credit_card',
+    description: 'Change a credit card by id. Include only fields that change.',
+    parameters: { type: 'OBJECT', properties: { id: { type: 'STRING' }, ...CARD_FIELDS }, required: ['id'] }
+  },
+  {
+    name: 'remove_credit_card',
+    description: 'Stop tracking credit cards by id. Only works for cards with no transactions or EMI plans.',
+    parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
+  },
+  {
+    name: 'add_card_emi',
+    description:
+      'Record a credit card purchase repaid in monthly EMIs. Each instalment (principal + interest) counts as that month\'s expense automatically; do NOT also log the purchase or the instalments with log_transactions. To convert a purchase already logged as an expense, pass its id as replaceTransactionId (its amount, date, category and card are used unless given) and it is replaced by the EMI plan.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { ...EMI_FIELDS, replaceTransactionId: { type: 'STRING', description: 'Id of an expense being converted to EMI' } },
+      required: ['months']
+    }
+  },
+  {
+    name: 'update_card_emi',
+    description: 'Correct an EMI plan by id (amount, rate, months, dates, fee, category, card). Include only fields that change.',
+    parameters: { type: 'OBJECT', properties: { id: { type: 'STRING' }, ...EMI_FIELDS }, required: ['id'] }
+  },
+  {
+    name: 'remove_card_emi',
+    description: 'Delete EMI plans by id (entered by mistake). Their instalments disappear from every month.',
+    parameters: { type: 'OBJECT', properties: { ids: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['ids'] }
+  },
+  {
+    name: 'get_credit_cards',
+    description:
+      'Each credit card\'s balance (opening balance + swipes + EMI instalments billed - payments), EMI principal still to be billed, total owed, available limit, this month\'s spend and payments, next due date and active EMIs. Shows the cards card.',
+    parameters: { type: 'OBJECT', properties: {} }
+  },
+  {
     name: 'get_suggestions',
     description:
       "The app's current suggestions for the user (surplus split across goals, emergency fund, FD maturities, tax-free gain harvesting, goals at risk). Automatically shows the suggestions card when open suggestions exist; you never apply them yourself.",
@@ -373,7 +439,7 @@ export const TOOL_DECLARATIONS = [
   {
     name: 'show_card',
     description:
-      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings), "goals" (goal progress) or "suggestions" (live suggestions with Accept/Adjust/Dismiss buttons). You may call show_card more than once if multiple cards help.',
+      'Show a visual card under your reply: "summary" (this month income/spent/saved), "buckets" (needs/wants/savings vs. plan), "categories" (category spending vs. limits), "portfolio" (net worth and holdings), "goals" (goal progress), "cards" (credit card balances and EMIs) or "suggestions" (live suggestions with Accept/Adjust/Dismiss buttons). You may call show_card more than once if multiple cards help.',
     parameters: {
       type: 'OBJECT',
       properties: { type: { type: 'STRING', enum: CARD_TYPES.filter((t) => t !== 'none') } },
@@ -397,11 +463,18 @@ function matches(tx, args) {
 
 function getSpendingSummary(args, { transactions }) {
   const rows = transactions.filter((tx) => matches(tx, args));
-  const totals = { income: 0, expenses: 0, savings: 0 };
+  const totals = { income: 0, expenses: 0, savings: 0, cardPayments: 0 };
   const groups = {};
   rows.forEach((tx) => {
-    const key = tx.type === 'income' ? 'income' : tx.type === 'savings' ? 'savings' : 'expenses';
-    totals[key] += tx.amount;
+    // Card bill payments are transfers: reported apart and kept out of
+    // breakdowns unless asked for
+    if (isCardPayment(tx)) {
+      totals.cardPayments += tx.amount;
+      if (args.type !== 'card_payment') return;
+    } else {
+      const key = tx.type === 'income' ? 'income' : tx.type === 'savings' ? 'savings' : 'expenses';
+      totals[key] += tx.amount;
+    }
     if (args.groupBy) {
       const g = args.groupBy === 'month' ? tx.date.slice(0, 7) : tx[args.groupBy];
       groups[g] ??= { amount: 0, count: 0 };
@@ -442,8 +515,9 @@ function findTransactions(args, { transactions }) {
   };
 }
 
-export function budgetStatus({ transactions, plan }, month) {
-  const metrics = computeMetrics(transactions, plan, month);
+export function budgetStatus(state, month) {
+  const { plan } = state;
+  const metrics = computeMetrics(ledgerOf(state), plan, month);
   return {
     month: metrics.month,
     plan,
@@ -507,7 +581,7 @@ function goalFields(args) {
 
 const goalCtx = (state, settings) => ({
   holdings: state.holdings ?? [],
-  transactions: state.transactions,
+  transactions: ledgerOf(state),
   plan: state.plan,
   settings: { calc: settings.calc, defaultReturns: settings.planning.defaultReturns }
 });
@@ -533,6 +607,13 @@ function addCard(pending, type) {
   pending.card = type;
 }
 
+// Sequential ids within a turn that stay unique when items are removed again.
+const nextSeq = (pending, kind) => {
+  pending.seq ??= {};
+  pending.seq[kind] = (pending.seq[kind] ?? -1) + 1;
+  return pending.seq[kind];
+};
+
 const dedupeById = (items) => [...new Map(items.map((x) => [x.id, x])).values()];
 
 // Converts a USD amount to rupees, returning a note for the model and card.
@@ -547,11 +628,16 @@ async function toInr(amount, currency) {
 // Returns (a promise of) the response object sent back to the model.
 export async function executeTool(name, args = {}, state, pending, fmt, settings) {
   const ids = new Set(state.transactions.map((t) => t.id));
+  // Instalment ids look like "<emi plan id>-i3"; they belong to the plan
+  const emiHint = (list) =>
+    list.some((id) => typeof id === 'string' && /^emi-.*-(i\d+|fee)$/.test(id))
+      ? { note: 'EMI instalments come from their EMI plan; change it with update_card_emi or remove_card_emi' }
+      : {};
   switch (name) {
     case 'get_spending_summary':
-      return getSpendingSummary(args, state);
+      return getSpendingSummary(args, { ...state, transactions: ledgerOf(state) });
     case 'find_transactions':
-      return findTransactions(args, state);
+      return findTransactions(args, { ...state, transactions: ledgerOf(state) });
     case 'get_budget_status':
       return budgetStatus(state, /^\d{4}-\d{2}$/.test(args.month ?? '') ? args.month : undefined);
 
@@ -559,18 +645,26 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
       const items = Array.isArray(args.transactions) ? args.transactions : [];
       const valid = items.filter((t) => normalizeTransaction(t));
       pending.transactions.push(...items);
-      return { logged: valid.length, rejected: items.length - valid.length };
+      const cardIds = new Set((state.creditCards ?? []).map((c) => c.id));
+      const unknownCards = [...new Set(valid.filter((t) => t.cardId && !cardIds.has(t.cardId)).map((t) => t.cardId))];
+      return {
+        logged: valid.length,
+        rejected: items.length - valid.length,
+        ...(unknownCards.length && { unknownCardIds: unknownCards, note: 'Expenses on these cards are saved without the card; payments to them are not saved. Use add_credit_card first.' })
+      };
     }
     case 'edit_transactions': {
       const edits = Array.isArray(args.edits) ? args.edits : [];
       const found = edits.filter((e) => ids.has(e?.id));
       pending.transactionEdits.push(...edits);
-      return { edited: found.length, unknownIds: edits.filter((e) => !ids.has(e?.id)).map((e) => e?.id) };
+      const unknownIds = edits.filter((e) => !ids.has(e?.id)).map((e) => e?.id);
+      return { edited: found.length, unknownIds, ...emiHint(unknownIds) };
     }
     case 'delete_transactions': {
       const list = Array.isArray(args.ids) ? args.ids : [];
       pending.deleteTransactionIds.push(...list);
-      return { deleted: list.filter((id) => ids.has(id)).length, unknownIds: list.filter((id) => !ids.has(id)) };
+      const unknownIds = list.filter((id) => !ids.has(id));
+      return { deleted: list.filter((id) => ids.has(id)).length, unknownIds, ...emiHint(unknownIds) };
     }
     case 'update_plan': {
       const { applied, skipped } = applyPlanUpdate(state.plan, args, fmt);
@@ -910,6 +1004,111 @@ export async function executeTool(name, args = {}, state, pending, fmt, settings
       const known = new Set((state.memories ?? []).map((m) => m.id));
       pending.memoryRemoveIds.push(...list.filter((id) => known.has(id)));
       return { forgotten: list.length };
+    }
+    case 'add_credit_card': {
+      const { fields, error } = cardFields(args);
+      if (error) return { error };
+      if (!fields.name) return { error: 'name is required' };
+      const cards = state.creditCards ?? [];
+      const dupe = cards.find((c) => c.name.toLowerCase() === fields.name.toLowerCase());
+      if (dupe) return { error: `A card named ${dupe.name} already exists (${dupe.id})` };
+      const card = { id: `card-${pending.idBase}-${nextSeq(pending, 'card')}`, ...fields, createdAt: new Date().toISOString() };
+      pending.cardsAdded.push(card);
+      return { added: card };
+    }
+    case 'update_credit_card': {
+      const { fields, error } = cardFields(args);
+      if (error) return { error };
+      if (Object.keys(fields).length === 0) return { error: 'Nothing to change' };
+      const fresh = pending.cardsAdded.find((c) => c.id === args.id);
+      if (fresh) {
+        Object.assign(fresh, fields);
+        return { updated: fresh };
+      }
+      const before = (state.creditCards ?? []).find((c) => c.id === args.id);
+      if (!before) return { error: `No card with id ${args.id}` };
+      const after = { ...before, ...fields };
+      pending.cardEdits = pending.cardEdits.filter((e) => e.before.id !== before.id);
+      pending.cardEdits.push({ before, after });
+      return { updated: after };
+    }
+    case 'remove_credit_card': {
+      const list = Array.isArray(args.ids) ? args.ids : [];
+      const inUse = (id) => state.transactions.some((t) => t.cardId === id) || (state.cardEmis ?? []).some((e) => e.cardId === id);
+      const blocked = list.filter(inUse);
+      const ok = list.filter((id) => !inUse(id));
+      pending.cardsAdded = pending.cardsAdded.filter((c) => !ok.includes(c.id));
+      const known = new Set((state.creditCards ?? []).map((c) => c.id));
+      pending.cardRemoveIds.push(...ok.filter((id) => known.has(id)));
+      return {
+        removed: ok.length,
+        ...(blocked.length && { notRemoved: blocked, reason: 'These cards have transactions or EMI plans; delete or move those first' })
+      };
+    }
+    case 'add_card_emi':
+    case 'update_card_emi': {
+      const adding = name === 'add_card_emi';
+      let prev = {};
+      let replaced = null;
+      if (adding && args.replaceTransactionId) {
+        replaced = state.transactions.find((t) => t.id === args.replaceTransactionId);
+        if (!replaced || replaced.type !== 'expense') return { error: `No expense with id ${args.replaceTransactionId}` };
+        prev = {
+          description: replaced.description,
+          principal: replaced.amount,
+          purchaseDate: replaced.date,
+          category: replaced.category,
+          bucket: replaced.bucket,
+          ...(replaced.cardId && { cardId: replaced.cardId })
+        };
+      }
+      const fresh = !adding && pending.emisAdded.find((e) => e.id === args.id);
+      const before = !adding && !fresh && (state.cardEmis ?? []).find((e) => e.id === args.id);
+      if (!adding && !fresh && !before) return { error: `No EMI plan with id ${args.id}` };
+      if (!adding) prev = fresh || before;
+      const { plan, error } = emiPlanFields(args, prev);
+      if (error) return { error };
+      if (args.cardId) plan.cardId = args.cardId;
+      if (!(state.creditCards ?? []).some((c) => c.id === plan.cardId)) {
+        return { error: plan.cardId ? `No card with id ${plan.cardId}` : 'cardId is required (add_credit_card first if the card is new)' };
+      }
+      if (adding) {
+        Object.assign(plan, { id: `emi-${pending.idBase}-${nextSeq(pending, 'emi')}`, createdAt: new Date().toISOString() });
+        pending.emisAdded.push(plan);
+        if (replaced) pending.deleteTransactionIds.push(replaced.id);
+      } else if (fresh) {
+        Object.assign(fresh, plan);
+      } else {
+        pending.emiEdits = pending.emiEdits.filter((e) => e.before.id !== before.id);
+        pending.emiEdits.push({ before, after: plan });
+      }
+      const schedule = emiSchedule(plan);
+      const interest = schedule.reduce((sum, i) => sum + i.interest, 0);
+      const billed = schedule.filter((i) => i.date <= today()).length;
+      return {
+        [adding ? 'added' : 'updated']: { id: plan.id, description: plan.description, cardId: plan.cardId },
+        ...(replaced && { replacedTransaction: replaced.id }),
+        emi: schedule[0].amount,
+        months: plan.months,
+        totalInterest: interest,
+        processingFee: plan.fee,
+        totalCost: plan.principal + interest + plan.fee,
+        firstEmiDate: schedule[0].date,
+        lastEmiDate: schedule[schedule.length - 1].date,
+        instalmentsCountedSoFar: billed
+      };
+    }
+    case 'remove_card_emi': {
+      const list = Array.isArray(args.ids) ? args.ids : [];
+      pending.emisAdded = pending.emisAdded.filter((e) => !list.includes(e.id));
+      const known = new Set((state.cardEmis ?? []).map((e) => e.id));
+      pending.emiRemoveIds.push(...list.filter((id) => known.has(id)));
+      return { removed: list.length };
+    }
+    case 'get_credit_cards': {
+      const overview = cardOverview(state);
+      if (overview.cards.length > 0) addCard(pending, 'cards');
+      return overview;
     }
     case 'show_card':
       if (!CARD_TYPES.includes(args.type) || args.type === 'none') return { error: `Unknown card type ${args.type}` };
